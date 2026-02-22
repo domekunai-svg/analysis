@@ -102,12 +102,13 @@ COLS_NEW = {
 }
 
 # Унифицированные имена внутри приложения (после load_df)
+# ВАЖНО: dept1 в датасете = Компания, dept2 = Отдел внутри компании
 C = {
     "date": "_date", "time": "_time", "dt": "dt",
-    "s_fio": "_s_fio", "s_id": "_s_id", "s_company": "_s_company",
-    "s_role": "_s_role", "s_dept1": "_s_dept1", "s_dept2": "_s_dept2",
-    "r_fio": "_r_fio", "r_id": "_r_id", "r_company": "_r_company",
-    "r_role": "_r_role", "r_dept1": "_r_dept1", "r_dept2": "_r_dept2",
+    "s_fio": "_s_fio", "s_id": "_s_id", "s_company_num": "_s_company_num",
+    "s_role": "_s_role", "s_company": "_s_company", "s_dept": "_s_dept",
+    "r_fio": "_r_fio", "r_id": "_r_id", "r_company_num": "_r_company_num",
+    "r_role": "_r_role", "r_company": "_r_company", "r_dept": "_r_dept",
     "value": "_value", "merits": "_merits", "comment": "_comment",
 }
 
@@ -134,10 +135,20 @@ SOCIAL_ROLES = {
     "quiet_presence":         {"name": "Тихое участие",          "color": "#696969", "icon": "🌫️"},
 }
 
-# Карта номеров компаний → названия (при наличии)
+# Справочник: номер компании → название
 COMPANY_MAP = {
-    # Заполняется автоматически из данных, но можно задать вручную:
-    # "1": "КТ", "2": "ТДТ", "3": "ТО", ...
+    "1":  "Корпорация Термекс",
+    "2":  "Торговый дом ТЕРМЕКС",
+    "3":  "Тепловое Оборудование",
+    "4":  "Термекс ГазПро",
+    "5":  "Термекс Энерджи",
+    "6":  'ТОО "Термекс Сары-Арка"',
+    "7":  "БЕЛАРУСЬ АКВАТЕРМЕКС",
+    "8":  "Thermex.ge",
+    "9":  "Thermex MLD",
+    "10": "Термекс-Сервис",
+    "11": "Центр Сервисных Компетенций",
+    "12": "Heateq Technology",
 }
 
 
@@ -178,19 +189,21 @@ def load_df(path_or_file):
             lambda r: _build_uid(r.get(COLS_NEW["r_company_num"]),
                                  r.get(COLS_NEW["r_num"])), axis=1)
 
-        # Компания
-        df[C["s_company"]] = df[COLS_NEW["s_company_num"]].apply(_safe_str)
-        df[C["r_company"]] = df[COLS_NEW["r_company_num"]].apply(_safe_str)
+        # Номер компании (сохраняем отдельно)
+        df[C["s_company_num"]] = df[COLS_NEW["s_company_num"]].apply(_safe_str)
+        df[C["r_company_num"]] = df[COLS_NEW["r_company_num"]].apply(_safe_str)
 
         # Должность
         df[C["s_role"]] = df[COLS_NEW["s_role"]].apply(_safe_str) if COLS_NEW["s_role"] in df.columns else ""
         df[C["r_role"]] = df[COLS_NEW["r_role"]].apply(_safe_str) if COLS_NEW["r_role"] in df.columns else ""
 
-        # Отделы
-        df[C["s_dept1"]] = df[COLS_NEW["s_dept1"]].apply(_safe_str) if COLS_NEW["s_dept1"] in df.columns else ""
-        df[C["s_dept2"]] = df[COLS_NEW["s_dept2"]].apply(_safe_str) if COLS_NEW["s_dept2"] in df.columns else ""
-        df[C["r_dept1"]] = df[COLS_NEW["r_dept1"]].apply(_safe_str) if COLS_NEW["r_dept1"] in df.columns else ""
-        df[C["r_dept2"]] = df[COLS_NEW["r_dept2"]].apply(_safe_str) if COLS_NEW["r_dept2"] in df.columns else ""
+        # Компания = Отдел/подразделение №1 из датасета
+        df[C["s_company"]] = df[COLS_NEW["s_dept1"]].apply(_safe_str) if COLS_NEW["s_dept1"] in df.columns else ""
+        df[C["r_company"]] = df[COLS_NEW["r_dept1"]].apply(_safe_str) if COLS_NEW["r_dept1"] in df.columns else ""
+
+        # Отдел = Отдел/подразделение №2 из датасета
+        df[C["s_dept"]] = df[COLS_NEW["s_dept2"]].apply(_safe_str) if COLS_NEW["s_dept2"] in df.columns else ""
+        df[C["r_dept"]] = df[COLS_NEW["r_dept2"]].apply(_safe_str) if COLS_NEW["r_dept2"] in df.columns else ""
 
         # Ценность, Мериты, Комментарий
         df[C["value"]] = df[COLS_NEW["value"]].apply(_safe_str) if COLS_NEW["value"] in df.columns else ""
@@ -225,14 +238,14 @@ def load_df(path_or_file):
         df[C["r_fio"]] = df[_get("receiver")].apply(_safe_str) if _get("receiver") else ""
         df[C["s_id"]] = df[_get("sender_id")].apply(_safe_str) if _get("sender_id") else ""
         df[C["r_id"]] = df[_get("receiver_id")].apply(_safe_str) if _get("receiver_id") else ""
-        df[C["s_company"]] = ""
-        df[C["r_company"]] = ""
+        df[C["s_company_num"]] = ""
+        df[C["r_company_num"]] = ""
         df[C["s_role"]] = df[_get("sender_role")].apply(_safe_str) if _get("sender_role") else ""
         df[C["r_role"]] = df[_get("receiver_role")].apply(_safe_str) if _get("receiver_role") else ""
-        df[C["s_dept1"]] = df[_get("sender_dept")].apply(_safe_str) if _get("sender_dept") else ""
-        df[C["s_dept2"]] = ""
-        df[C["r_dept1"]] = df[_get("receiver_dept")].apply(_safe_str) if _get("receiver_dept") else ""
-        df[C["r_dept2"]] = ""
+        df[C["s_company"]] = df[_get("sender_dept")].apply(_safe_str) if _get("sender_dept") else ""
+        df[C["s_dept"]] = ""
+        df[C["r_company"]] = df[_get("receiver_dept")].apply(_safe_str) if _get("receiver_dept") else ""
+        df[C["r_dept"]] = ""
         df[C["value"]] = df[_get("value")].apply(_safe_str) if _get("value") else ""
         m_col = _get("merits")
         if m_col:
@@ -285,16 +298,16 @@ def _build_uid(company_num, person_num):
 # ========================= ПОСТРОЕНИЕ ГРАФОВ =========================
 
 def build_hierarchical_graph(df: pd.DataFrame, merit_range: tuple = (1, 50),
-                             dept_level: str = "dept1"):
+                             dept_level: str = "dept"):
     """
-    dept_level: "dept1" — группировка по Отделу №1
-                "dept2" — группировка по Отделу №2 (подотдел)
+    dept_level: "company" — группировка по компаниям (Отдел №1 в датасете)
+                "dept"    — группировка по отделам внутри компаний (Отдел №2)
     Самонаграждения всегда отфильтрованы.
     """
     df = df[df[C["s_id"]] != df[C["r_id"]]].copy()
 
-    s_dept_col = C["s_dept1"] if dept_level == "dept1" else C["s_dept2"]
-    r_dept_col = C["r_dept1"] if dept_level == "dept1" else C["r_dept2"]
+    s_dept_col = C["s_company"] if dept_level == "company" else C["s_dept"]
+    r_dept_col = C["r_company"] if dept_level == "company" else C["r_dept"]
 
     person_agg = (
         df.groupby([C["s_id"], C["r_id"], C["s_fio"], C["r_fio"],
@@ -570,18 +583,43 @@ def create_force_d3_viz(G, metrics):
 def sidebar_controls(df: pd.DataFrame):
     st.sidebar.header("⚙️ Настройки")
 
-    # --- Компания ---
-    companies = sorted(set(
-        df[C["s_company"]].dropna().unique().tolist() +
-        df[C["r_company"]].dropna().unique().tolist()
+    # --- Компания (= Отдел/подразделение №1 в датасете) ---
+    all_companies = sorted(set(
+        df[C["s_company"]].dropna().unique().tolist() + df[C["r_company"]].dropna().unique().tolist()
     ))
-    companies = [c for c in companies if c]  # убрать пустые
-    if companies:
-        selected_companies = st.sidebar.multiselect(
-            "🏭 Компания", options=companies, default=companies
+    all_companies = [c for c in all_companies if c]
+    selected_companies = st.sidebar.multiselect("🏭 Компания", options=all_companies, default=all_companies)
+
+    # --- Отдел (= Отдел/подразделение №2 в датасете, зависит от выбранных компаний) ---
+    df_comp = df[df[C["s_company"]].isin(selected_companies) | df[C["r_company"]].isin(selected_companies)]
+    all_depts = sorted(set(
+        df_comp[C["s_dept"]].dropna().unique().tolist() + df_comp[C["r_dept"]].dropna().unique().tolist()
+    ))
+    all_depts = [d for d in all_depts if d]
+    if all_depts:
+        selected_depts = st.sidebar.multiselect("🏢 Отдел", options=all_depts, default=all_depts)
+    else:
+        selected_depts = []
+
+    # --- Группировка графа ---
+    dept_level = "dept"
+    if all_depts:
+        dept_level = st.sidebar.radio(
+            "Группировка графа", options=["company", "dept"],
+            format_func=lambda x: "По компаниям" if x == "company" else "По отделам",
+            index=1,  # по умолчанию: по отделам
+            horizontal=True
         )
     else:
-        selected_companies = []
+        dept_level = "company"
+
+    # --- Сотрудники (зависят от компаний + отделов) ---
+    df_dept_filt = df_comp
+    if selected_depts:
+        df_dept_filt = df_comp[
+            df_comp[C["s_dept"]].isin(selected_depts) | df_comp[C["r_dept"]].isin(selected_depts) |
+            (df_comp[C["s_dept"]] == "") | (df_comp[C["r_dept"]] == "")
+        ]
 
     # --- Период: год / месяц ---
     st.sidebar.markdown("### 📅 Период")
@@ -599,40 +637,6 @@ def sidebar_controls(df: pd.DataFrame):
     selected_months = [n2m.get(mn, 0) for mn in sel_m_names]
 
     st.sidebar.markdown("---")
-
-    # --- Отделы №1 ---
-    all_d1 = sorted(set(
-        df[C["s_dept1"]].dropna().unique().tolist() + df[C["r_dept1"]].dropna().unique().tolist()
-    ))
-    all_d1 = [d for d in all_d1 if d]
-    selected_dept1 = st.sidebar.multiselect("🏢 Отдел №1", options=all_d1, default=all_d1)
-
-    # --- Отделы №2 (подотделы, зависят от выбранных Отдел №1) ---
-    df_d1 = df[df[C["s_dept1"]].isin(selected_dept1) | df[C["r_dept1"]].isin(selected_dept1)]
-    all_d2 = sorted(set(
-        df_d1[C["s_dept2"]].dropna().unique().tolist() + df_d1[C["r_dept2"]].dropna().unique().tolist()
-    ))
-    all_d2 = [d for d in all_d2 if d]
-    if all_d2:
-        selected_dept2 = st.sidebar.multiselect("🏢 Подотдел №2", options=all_d2, default=all_d2)
-    else:
-        selected_dept2 = []
-
-    # --- Уровень группировки графа ---
-    dept_level = "dept1"
-    if all_d2:
-        dept_level = st.sidebar.radio(
-            "Группировка графа", options=["dept1", "dept2"],
-            format_func=lambda x: "По отделам №1" if x == "dept1" else "По подотделам №2",
-            horizontal=True
-        )
-
-    # --- Сотрудники ---
-    df_dept_filt = df_d1
-    if selected_dept2:
-        df_dept_filt = df_d1[
-            df_d1[C["s_dept2"]].isin(selected_dept2) | df_d1[C["r_dept2"]].isin(selected_dept2)
-        ]
     all_ppl = sorted(set(
         df_dept_filt[C["s_fio"]].dropna().unique().tolist() +
         df_dept_filt[C["r_fio"]].dropna().unique().tolist()
@@ -664,10 +668,10 @@ def sidebar_controls(df: pd.DataFrame):
     show_stats = st.sidebar.checkbox("📊 Продвинутая статистика", value=True)
 
     return {
-        "companies": selected_companies,
-        "years": selected_years, "months": selected_months,
-        "dept1": set(selected_dept1), "dept2": set(selected_dept2),
+        "companies": set(selected_companies),
+        "depts": set(selected_depts),
         "dept_level": dept_level,
+        "years": selected_years, "months": selected_months,
         "people": selected_people,
         "values": set(selected_values),
         "merit_range": merit_range,
@@ -679,17 +683,15 @@ def sidebar_controls(df: pd.DataFrame):
 def filter_df(df, cfg):
     m = pd.Series(True, index=df.index)
     if cfg["companies"]:
-        m &= (df[C["s_company"]].isin(cfg["companies"]) | df[C["r_company"]].isin(cfg["companies"]) |
-               (df[C["s_company"]] == "") | (df[C["r_company"]] == ""))
+        m &= (df[C["s_company"]].isin(cfg["companies"]) | df[C["r_company"]].isin(cfg["companies"]))
     if cfg["years"]:
         m &= df["dt"].dt.year.isin(cfg["years"])
     if cfg["months"]:
         m &= df["dt"].dt.month.isin(cfg["months"])
     m &= df[C["value"]].isin(cfg["values"])
-    m &= (df[C["s_dept1"]].isin(cfg["dept1"]) | df[C["r_dept1"]].isin(cfg["dept1"]))
-    if cfg["dept2"]:
-        m &= (df[C["s_dept2"]].isin(cfg["dept2"]) | df[C["r_dept2"]].isin(cfg["dept2"]) |
-               (df[C["s_dept2"]] == "") | (df[C["r_dept2"]] == ""))
+    if cfg["depts"]:
+        m &= (df[C["s_dept"]].isin(cfg["depts"]) | df[C["r_dept"]].isin(cfg["depts"]) |
+               (df[C["s_dept"]] == "") | (df[C["r_dept"]] == ""))
     if cfg["people"]:
         m &= (df[C["s_fio"]].isin(cfg["people"]) | df[C["r_fio"]].isin(cfg["people"]))
     return df.loc[m].copy()
@@ -724,7 +726,9 @@ def main():
         uniq = pd.Index(df_f[C["s_id"]]).append(pd.Index(df_f[C["r_id"]])).nunique()
         st.metric("👥 Сотрудников", f"{uniq:,}")
     with c3: st.metric("⭐ Меритов", f"{df_f[C['merits']].sum():,}")
-    with c4: st.metric("🏢 Отделов", f"{df_f[C['s_dept1']].nunique():,}")
+    with c4:
+        n_depts = len(set(df_f[C['s_dept']].unique().tolist() + df_f[C['r_dept']].unique().tolist()) - {""})
+        st.metric("🏢 Отделов", f"{n_depts:,}")
     with c5:
         n_comp = len(set(df_f[C["s_company"]].unique().tolist() + df_f[C["r_company"]].unique().tolist()) - {""})
         if n_comp > 0:
