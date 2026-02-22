@@ -1132,9 +1132,33 @@ def main():
         tx_raw = load_transactions(tx_path)
         tx_df  = merge_data(tx_raw, emp_df)
 
+    # --- ДИАГНОСТИКА (временная) ---
+    with st.expander("🔍 Диагностика загрузки данных", expanded=True):
+        st.write(f"**employees.xlsx:** {len(emp_df)} строк")
+        st.write(f"**dataset.xlsx (raw):** {len(tx_raw)} строк")
+        st.write(f"**После merge:** {len(tx_df)} строк")
+        st.write(f"**Колонки tx_df:** {list(tx_df.columns)}")
+        st.write(f"**Годы в данных:** {sorted(tx_df['year'].dropna().unique().astype(int).tolist())}")
+        st.write(f"**Месяцы в данных:** {sorted(tx_df['month'].dropna().unique().astype(int).tolist())}")
+        st.write(f"**Уникальные компании:** {tx_df['sender_Компания'].dropna().unique().tolist()}")
+        st.write(f"**sender_Компания NaN:** {tx_df['sender_Компания'].isna().sum()}")
+        st.write("**Первые 3 строки tx_df:**")
+        st.dataframe(tx_df.head(3))
+
     # --- Фильтры ---
     cfg = sidebar_controls(tx_df, emp_df)
+
+    with st.expander("🔍 Диагностика фильтров", expanded=True):
+        st.write(f"**cfg['years']:** {cfg['years']}")
+        st.write(f"**cfg['months']:** {cfg['months']}")
+        st.write(f"**cfg['values'] (кол-во):** {len(cfg['values'])}")
+        st.write(f"**cfg['companies']:** {cfg['companies']}")
+        st.write(f"**cfg['depts'] (кол-во):** {len(cfg['depts'])}")
+
     filtered = apply_filters(tx_df, emp_df, cfg)
+
+    with st.expander("🔍 Результат фильтрации", expanded=True):
+        st.write(f"**Строк после фильтра:** {len(filtered)}")
 
     if len(filtered) == 0:
         st.warning("⚠️ Нет данных для выбранных фильтров")
