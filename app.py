@@ -300,22 +300,35 @@ def _build_uid(company_num, person_num):
 def build_hierarchical_graph(df: pd.DataFrame, merit_range: tuple = (1, 50),
                              dept_level: str = "dept"):
     """
-    dept_level: "company" — группировка по компаниям (Отдел №1 в датасете)
-                "dept"    — группировка по отделам внутри компаний (Отдел №2)
-    Самонаграждения всегда отфильтрованы.
+    dept_level: "company" — группировка узлов по компаниям
+                "dept"    — группировка узлов по отделам внутри компаний
     """
     df = df[df[C["s_id"]] != df[C["r_id"]]].copy()
 
-    s_dept_col = C["s_company"] if dept_level == "company" else C["s_dept"]
-    r_dept_col = C["r_company"] if dept_level == "company" else C["r_dept"]
+    # Определяем какое поле использовать для группировки в граф отделов
+    if dept_level == "company":
+        df["_s_grp"] = df[C["s_company"]]
+        df["_r_grp"] = df[C["r_company"]]
+    else:
+        df["_s_grp"] = df[C["s_dept"]]
+        df["_r_grp"] = df[C["r_dept"]]
 
+    # Агрегация на уровне пар сотрудников
     person_agg = (
-        df.groupby([C["s_id"], C["r_id"], C["s_fio"], C["r_fio"],
-                     s_dept_col, r_dept_col, C["s_company"], C["r_company"]],
-                    dropna=False)
-        .agg(total_merits=(C["merits"], "sum"), n_msgs=("dt", "count"))
+        df.groupby([C["s_id"], C["r_id"]], dropna=False)
+        .agg(
+            total_merits=(C["merits"], "sum"),
+            n_msgs=("dt", "count"),
+            s_fio=(C["s_fio"], "first"),
+            r_fio=(C["r_fio"], "first"),
+            s_grp=("_s_grp", "first"),
+            r_grp=("_r_grp", "first"),
+            s_company=(C["s_company"], "first"),
+            r_company=(C["r_company"], "first"),
+        )
         .reset_index()
     )
+
     min_m, max_m = merit_range
     person_agg = person_agg[
         (person_agg["total_merits"] >= min_m) & (person_agg["total_merits"] <= max_m)
@@ -324,9 +337,9 @@ def build_hierarchical_graph(df: pd.DataFrame, merit_range: tuple = (1, 50),
     G_people = nx.DiGraph()
     for _, row in person_agg.iterrows():
         sid, rid = row[C["s_id"]], row[C["r_id"]]
-        sname, rname = row[C["s_fio"]], row[C["r_fio"]]
-        sdept, rdept = row[s_dept_col], row[r_dept_col]
-        scomp, rcomp = row[C["s_company"]], row[C["r_company"]]
+        sname, rname = row["s_fio"], row["r_fio"]
+        sdept, rdept = row["s_grp"], row["r_grp"]
+        scomp, rcomp = row["s_company"], row["r_company"]
 
         if sid not in G_people:
             G_people.add_node(sid, label=sname, dept=sdept, company=scomp, type="person")
@@ -336,9 +349,9 @@ def build_hierarchical_graph(df: pd.DataFrame, merit_range: tuple = (1, 50),
         w = float(row["total_merits"])
         G_people.add_edge(sid, rid, weight=w, length=1.0 / max(w, 0.01), msgs=int(row["n_msgs"]))
 
-    # Граф отделов
+    # Граф отделов/компаний
     dept_agg = (
-        person_agg.groupby([s_dept_col, r_dept_col])
+        person_agg.groupby(["s_grp", "r_grp"])
         .agg(total_merits=("total_merits", "sum"), n_people=("total_merits", "count"))
         .reset_index()
     )
@@ -350,7 +363,7 @@ def build_hierarchical_graph(df: pd.DataFrame, merit_range: tuple = (1, 50),
     for dept, members in dept_members.items():
         G_depts.add_node(dept, label=dept, type="dept", size=len(members), members=members)
     for _, row in dept_agg.iterrows():
-        sd, rd = row[s_dept_col], row[r_dept_col]
+        sd, rd = row["s_grp"], row["r_grp"]
         if sd != rd:
             G_depts.add_edge(sd, rd, weight=float(row["total_merits"]), people=int(row["n_people"]))
 
@@ -564,17 +577,115 @@ def create_hierarchical_d3_viz(G_depts, G_people, dept_members, metrics_depts, m
 
 
 def create_force_d3_viz(G, metrics):
-    nd = [{"id":str(n),"label":G.nodes[n].get("label",""),"dept":G.nodes[n].get("dept",""),"community":metrics.get("communities",{}).get(n,0),"pagerank":metrics.get("pagerank",{}).get(n,0),"in_strength":metrics.get("in_strength",{}).get(n,0),"out_strength":metrics.get("out_strength",{}).get(n,0)} for n in G.nodes()]
-    ed = [{"source":str(u),"target":str(v),"weight":d.get("weight",1)} for u,v,d in G.edges(data=True)]
+    nd = [{"id":str(n),"label":G.nodes[n].get("label",""),"dept":G.nodes[n].get("dept",""),
+           "community":int(metrics.get("communities",{}).get(n,0)),
+           "pagerank":float(metrics.get("pagerank",{}).get(n,0)),
+           "in_strength":float(metrics.get("in_strength",{}).get(n,0)),
+           "out_strength":float(metrics.get("out_strength",{}).get(n,0))} for n in G.nodes()]
+    ed = [{"source":str(u),"target":str(v),"weight":float(d.get("weight",1))} for u,v,d in G.edges(data=True)]
     nc = max(len(set(metrics.get("communities",{}).values())),1)
-    cl = ["#00d4ff","#7b2cbf","#ff006e","#ffbe0b","#8ac926","#ff006e","#3a86ff","#fb5607","#06ffa5","#8338ec"]
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><script src="https://d3js.org/d3.v7.min.js"></script>
-    <style>body{{margin:0;background:#0a0e27;overflow:hidden;}}.node{{cursor:pointer;stroke:#fff;stroke-width:1.5px;}}.link{{stroke:#999;stroke-opacity:.3;}}.label{{fill:white;font-size:10px;pointer-events:none;text-anchor:middle;text-shadow:0 0 3px #000;}}.controls{{position:absolute;top:10px;right:10px;z-index:1000;}}.btn{{background:linear-gradient(90deg,#00d4ff,#7b2cbf);color:white;border:none;padding:8px 15px;margin:2px;border-radius:5px;cursor:pointer;font-size:12px;}}#info{{position:absolute;bottom:10px;left:10px;color:white;background:rgba(0,0,0,.7);padding:10px;border-radius:5px;font-size:12px;max-width:300px;}}</style></head><body>
-    <div class="controls"><button class="btn" onclick="rz()">🔍 Зум</button><button class="btn" onclick="tl()">🏷️</button><button class="btn" onclick="tp()">⚡</button></div><div id="info">Наведите на узел</div><svg id="viz"></svg>
-    <script>const W=window.innerWidth,H=window.innerHeight,nodes={json.dumps(nd)},links={json.dumps(ed)},colors={json.dumps(cl[:nc])};const svg=d3.select("#viz").attr("width",W).attr("height",H);const g=svg.append("g");const zm=d3.zoom().scaleExtent([.1,10]).on("zoom",e=>g.attr("transform",e.transform));svg.call(zm);
-    const le=g.append("g").selectAll("line").data(links).join("line").attr("class","link").attr("stroke-width",d=>Math.sqrt(d.weight)/2);const ne=g.append("g").selectAll("circle").data(nodes).join("circle").attr("class","node").attr("r",d=>3+Math.sqrt(d.pagerank*1000)).attr("fill",d=>colors[d.community%colors.length]).on("mouseover",(e,d)=>{{document.getElementById("info").innerHTML=`<strong>${{d.label}}</strong><br>Отдел: ${{d.dept}}<br>Вх: ${{d.in_strength.toFixed(1)}} Исх: ${{d.out_strength.toFixed(1)}}`;;}}).call(d3.drag().on("start",(e,d)=>{{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}}).on("drag",(e,d)=>{{d.fx=e.x;d.fy=e.y;}}).on("end",(e,d)=>{{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}}));
-    const lb=g.append("g").selectAll("text").data(nodes).join("text").attr("class","label").attr("dy",-8).text(d=>d.label.length>15?d.label.slice(0,15)+"...":d.label);const sim=d3.forceSimulation(nodes).force("link",d3.forceLink(links).id(d=>d.id).distance(70)).force("charge",d3.forceManyBody().strength(-200)).force("center",d3.forceCenter(W/2,H/2)).force("collision",d3.forceCollide().radius(15)).on("tick",()=>{{le.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y).attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);ne.attr("cx",d=>d.x).attr("cy",d=>d.y);lb.attr("x",d=>d.x).attr("y",d=>d.y);}});
-    function rz(){{svg.transition().duration(750).call(zm.transform,d3.zoomIdentity);}}let lv=true;function tl(){{lv=!lv;lb.style("opacity",lv?1:0);}}let pv=true;function tp(){{pv=!pv;if(pv)sim.alpha(.3).restart();else sim.stop();}}</script></body></html>"""
+    cl = ["#00d4ff","#7b2cbf","#ff006e","#ffbe0b","#8ac926","#3a86ff","#fb5607","#06ffa5","#8338ec","#e9c46a"]
+    nodes_json = json.dumps(nd, ensure_ascii=False)
+    edges_json = json.dumps(ed, ensure_ascii=False)
+    colors_json = json.dumps(cl[:max(nc,1)])
+
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { margin:0; padding:0; background:#0a0e27; overflow:hidden; }
+        svg { width:100%; height:100%; display:block; }
+        .node { cursor:pointer; stroke:#fff; stroke-width:1.5px; }
+        .link { stroke:#999; stroke-opacity:.3; }
+        .label { fill:white; font-size:10px; pointer-events:none; text-anchor:middle;
+                 text-shadow:0 0 3px #000; }
+        .controls { position:absolute; top:10px; right:10px; z-index:1000; }
+        .btn { background:linear-gradient(90deg,#00d4ff,#7b2cbf); color:white;
+               border:none; padding:8px 15px; margin:2px; border-radius:5px;
+               cursor:pointer; font-size:12px; }
+        #info { position:absolute; bottom:10px; left:10px; color:white;
+                background:rgba(0,0,0,.7); padding:10px; border-radius:5px;
+                font-size:12px; max-width:300px; }
+    </style></head><body>
+    <div class="controls">
+        <button class="btn" onclick="resetZoom()">🔍 Зум</button>
+        <button class="btn" onclick="toggleLabels()">🏷️ Метки</button>
+        <button class="btn" onclick="togglePhysics()">⚡ Физика</button>
+    </div>
+    <div id="info">Наведите на узел для информации</div>
+    <svg id="viz"></svg>
+    <script>
+    (function() {
+        var W = Math.max(document.documentElement.clientWidth || 800, 800);
+        var H = Math.max(document.documentElement.clientHeight || 600, 600);
+        var nodes = """ + nodes_json + """;
+        var links = """ + edges_json + """;
+        var colors = """ + colors_json + """;
+
+        var svg = d3.select("#viz").attr("width", W).attr("height", H)
+            .attr("viewBox", "0 0 " + W + " " + H);
+        var g = svg.append("g");
+        var zoom = d3.zoom().scaleExtent([0.1, 10])
+            .on("zoom", function(event) { g.attr("transform", event.transform); });
+        svg.call(zoom);
+
+        var linkEl = g.append("g").selectAll("line").data(links).join("line")
+            .attr("class", "link")
+            .attr("stroke-width", function(d) { return Math.max(Math.sqrt(d.weight) / 2, 0.5); });
+
+        var nodeEl = g.append("g").selectAll("circle").data(nodes).join("circle")
+            .attr("class", "node")
+            .attr("r", function(d) { return Math.max(3 + Math.sqrt(d.pagerank * 1000), 4); })
+            .attr("fill", function(d) { return colors[d.community % colors.length]; })
+            .on("mouseover", function(event, d) {
+                document.getElementById("info").innerHTML =
+                    "<strong>" + d.label + "</strong><br>" +
+                    "Отдел: " + d.dept + "<br>" +
+                    "Сообщество: " + d.community + "<br>" +
+                    "Вх: " + d.in_strength.toFixed(1) + " Исх: " + d.out_strength.toFixed(1);
+            })
+            .call(d3.drag()
+                .on("start", function(event, d) {
+                    if (!event.active) sim.alphaTarget(0.3).restart();
+                    d.fx = d.x; d.fy = d.y;
+                })
+                .on("drag", function(event, d) { d.fx = event.x; d.fy = event.y; })
+                .on("end", function(event, d) {
+                    if (!event.active) sim.alphaTarget(0);
+                    d.fx = null; d.fy = null;
+                })
+            );
+
+        var labelEl = g.append("g").selectAll("text").data(nodes).join("text")
+            .attr("class", "label").attr("dy", -8)
+            .text(function(d) { return d.label.length > 15 ? d.label.slice(0,15) + "..." : d.label; });
+
+        var sim = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(links).id(function(d) { return d.id; }).distance(70))
+            .force("charge", d3.forceManyBody().strength(-200))
+            .force("center", d3.forceCenter(W / 2, H / 2))
+            .force("collision", d3.forceCollide().radius(15))
+            .on("tick", function() {
+                linkEl.attr("x1", function(d){return d.source.x;}).attr("y1", function(d){return d.source.y;})
+                      .attr("x2", function(d){return d.target.x;}).attr("y2", function(d){return d.target.y;});
+                nodeEl.attr("cx", function(d){return d.x;}).attr("cy", function(d){return d.y;});
+                labelEl.attr("x", function(d){return d.x;}).attr("y", function(d){return d.y;});
+            });
+
+        window.resetZoom = function() {
+            svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+        };
+        var labelsOn = true;
+        window.toggleLabels = function() {
+            labelsOn = !labelsOn;
+            labelEl.style("opacity", labelsOn ? 1 : 0);
+        };
+        var physicsOn = true;
+        window.togglePhysics = function() {
+            physicsOn = !physicsOn;
+            if (physicsOn) sim.alpha(0.3).restart(); else sim.stop();
+        };
+    })();
+    </script></body></html>"""
     return html
 
 
