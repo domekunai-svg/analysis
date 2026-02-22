@@ -482,8 +482,8 @@ def render_kpis(kpis):
          "Показывает насколько полно сотрудники используют возможности для позитивной оценки коллег. Отношение вовлечённых к участникам программы."),
         ("Показатель лояльности", f"{kpis['kpi2']}%",
          f"Процент отправителей (>1 благодарности) от всех {TOTAL_COMPANY_EMPLOYEES} сотрудников компании. Отражает вовлечение в культуру благодарения."),
-        ("ER программы", f"{kpis['kpi3']}%",
-         "Отражает активную позицию участников программы. Отношение отправителей хотя бы одной благодарности к числу участников 3Д."),
+        ("Вовлечённость в программу", f"{kpis['kpi3']}%",
+         "Показатель отражает активную позицию участников программы. Отношение отправителей хотя бы одной благодарности к числу участников 3Д."),
         ("Голосов использовано", f"{kpis['kpi4']}%",
          "Насколько полно используются возможности для оценки коллег. Отношение использованных голосов к общему числу эмитированных за период."),
         ("Степень полезности", f"{kpis['kpi5']}",
@@ -512,7 +512,7 @@ def render_tops(filtered_df, emp_df):
     def get_info(emp_id):
         if emp_id in emp_map.index:
             r = emp_map.loc[emp_id]
-            name = f"{r.get(EMP_COLS['last_name'],'')} {r.get(EMP_COLS['first_name'],'')} {r.get(EMP_COLS['middle_name'],'')}".strip()
+            name = f"{r.get(EMP_COLS['last_name'],'')} {r.get(EMP_COLS['first_name'],'')}".strip()
             return {
                 "ФИО": name,
                 "Должность": r.get(EMP_COLS["position"], ""),
@@ -523,11 +523,12 @@ def render_tops(filtered_df, emp_df):
 
     st.markdown('<div class="section-header">Топ сотрудников</div>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🏆 Полезность (получено меритов)",
         "🚀 Активность (отправлено меритов)",
         "👥 Охват — получили от стольких",
-        "📣 Охват — поблагодарили стольких"
+        "📣 Охват — поблагодарили стольких",
+        "🎯 Топ по ценностям"
     ])
 
     N = 20
@@ -558,6 +559,8 @@ def render_tops(filtered_df, emp_df):
                       .nunique().reset_index()
                       .rename(columns={TX_COLS["sender_id"]: "Уникальных отправителей"})
                       .sort_values("Уникальных отправителей", ascending=False).head(N))
+        total_recv = filtered_df[TX_COLS["sender_id"]].nunique()
+        st.caption(f"Всего уникальных отправителей в выборке: **{total_recv}**")
         rows = []
         for rank, (_, row) in enumerate(reach_recv.iterrows(), 1):
             info = get_info(row[TX_COLS["receiver_id"]])
@@ -570,11 +573,33 @@ def render_tops(filtered_df, emp_df):
                       .nunique().reset_index()
                       .rename(columns={TX_COLS["receiver_id"]: "Уникальных получателей"})
                       .sort_values("Уникальных получателей", ascending=False).head(N))
+        total_sent = filtered_df[TX_COLS["receiver_id"]].nunique()
+        st.caption(f"Всего уникальных получателей в выборке: **{total_sent}**")
         rows = []
         for rank, (_, row) in enumerate(reach_sent.iterrows(), 1):
             info = get_info(row[TX_COLS["sender_id"]])
             rows.append({"#": rank, **info, "Уник. получателей": int(row["Уникальных получателей"])})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+    # --- Топ по ценностям ---
+    with tab5:
+        val_counts = (filtered_df.groupby(TX_COLS["value"])
+                      .agg(
+                          Транзакций=(TX_COLS["merits"], "count"),
+                          Меритов=(TX_COLS["merits"], "sum"),
+                      )
+                      .reset_index()
+                      .rename(columns={TX_COLS["value"]: "Ценность"})
+                      .sort_values("Меритов", ascending=False))
+        val_counts["Доля меритов, %"] = (
+            val_counts["Меритов"] / val_counts["Меритов"].sum() * 100
+        ).round(1)
+        val_counts["Доля транзакций, %"] = (
+            val_counts["Транзакций"] / val_counts["Транзакций"].sum() * 100
+        ).round(1)
+        val_counts.insert(0, "#", range(1, len(val_counts) + 1))
+        st.dataframe(val_counts, use_container_width=True, hide_index=True)
 
 
 # ========================= ПОСТРОЕНИЕ ГРАФОВ =========================
@@ -789,7 +814,13 @@ def create_social_graph_viz(G, metrics):
         .attr("stroke-width", d => Math.sqrt(d.weight)*0.6 + 0.3);
 
     const nodeEls = g.append("g").selectAll("circle").data(nodes).join("circle")
-        .attr("r", d => 4 + Math.sqrt(d.pagerank * 800))
+        .attr("r", d => {{
+            const pr = nodes.map(n => n.pagerank);
+            const minPr = Math.min(...pr), maxPr = Math.max(...pr);
+            const range = maxPr - minPr || 1;
+            const minR = 4, maxR = 16;
+            return minR + (maxR - minR) * (d.pagerank - minPr) / range;
+        }})
         .attr("fill", d => colors[d.community % colors.length])
         .attr("stroke","#0d1117").attr("stroke-width",1.5)
         .attr("cursor","pointer")
@@ -1087,7 +1118,8 @@ def render_advanced_stats(G_people, metrics):
         st.dataframe(df_m.nlargest(15,"K-core")[["ФИО","Компания","Отдел","K-core","PageRank"]], use_container_width=True, hide_index=True)
 
     st.markdown("#### 📋 Полная таблица метрик")
-    st.dataframe(df_m.sort_values("PageRank", ascending=False), use_container_width=True, hide_index=True, height=400)
+    st.dataframe(df_m.drop(columns=["id"], errors="ignore").sort_values("PageRank", ascending=False),
+                 use_container_width=True, hide_index=True, height=400)
 
     # Экспорт
     st.markdown("---")
@@ -1142,33 +1174,13 @@ def main():
         tx_raw = load_transactions(tx_path)
         tx_df  = merge_data(tx_raw, emp_df)
 
-    # --- ДИАГНОСТИКА (временная) ---
-    with st.expander("🔍 Диагностика загрузки данных", expanded=True):
-        st.write(f"**employees.xlsx:** {len(emp_df)} строк")
-        st.write(f"**dataset.xlsx (raw):** {len(tx_raw)} строк")
-        st.write(f"**После merge:** {len(tx_df)} строк")
-        st.write(f"**ID отправителя (тип / примеры):** {tx_raw[TX_COLS['sender_id']].dtype} / {tx_raw[TX_COLS['sender_id']].head(3).tolist()}")
-        st.write(f"**ID после конвертации:** {tx_df[TX_COLS['sender_id']].head(3).tolist()}")
-        st.write(f"**emp_id примеры:** {emp_df[EMP_COLS['emp_id']].head(3).tolist()}")
-        st.write(f"**Годы в данных:** {sorted(tx_df['year'].dropna().unique().astype(int).tolist())}")
-        st.write(f"**sender_Компания NaN:** {tx_df['sender_Компания'].isna().sum()} / {len(tx_df)}")
-        st.write(f"**Уникальные компании:** {tx_df['sender_Компания'].dropna().unique().tolist()[:5]}")
-        st.dataframe(tx_df.head(3))
 
     # --- Фильтры ---
     cfg = sidebar_controls(tx_df, emp_df)
 
-    with st.expander("🔍 Диагностика фильтров", expanded=True):
-        st.write(f"**cfg['years']:** {cfg['years']}")
-        st.write(f"**cfg['months']:** {cfg['months']}")
-        st.write(f"**cfg['values'] (кол-во):** {len(cfg['values'])}")
-        st.write(f"**cfg['companies']:** {cfg['companies']}")
-        st.write(f"**cfg['depts'] (кол-во):** {len(cfg['depts'])}")
 
     filtered = apply_filters(tx_df, emp_df, cfg)
 
-    with st.expander("🔍 Результат фильтрации", expanded=True):
-        st.write(f"**Строк после фильтра:** {len(filtered)}")
 
     if len(filtered) == 0:
         st.warning("⚠️ Нет данных для выбранных фильтров")
