@@ -345,10 +345,19 @@ def sidebar_controls(tx_df, emp_df):
         index=1
     )
 
+    # Считаем реальный максимум суммарных меритов между парами
+    try:
+        pair_merits = (tx_df.groupby([TX_COLS["sender_id"], TX_COLS["receiver_id"]])[TX_COLS["merits"]]
+                       .sum())
+        real_max = max(int(pair_merits.max()), 10)
+    except:
+        real_max = 500
+
     merit_range = st.sidebar.slider(
-        "Диапазон меритов (связь)",
-        min_value=1, max_value=10,
-        value=(1, 10), step=1
+        "Диапазон меритов на связь",
+        min_value=1, max_value=real_max,
+        value=(1, real_max), step=1,
+        help=f"Суммарные мериты между парой сотрудников. Макс. в данных: {real_max}"
     )
 
     return {
