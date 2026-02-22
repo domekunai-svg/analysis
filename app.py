@@ -227,44 +227,76 @@ TX_COLS = {
 def load_employees(path):
     df = pd.read_excel(path, engine="openpyxl")
     df.columns = [c.strip() for c in df.columns]
+
+    # Убираем пробелы во всех строковых колонках (решает 'БЕЛАРУСЬ АКВАТЕРМЕКС ')
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].astype(str).str.strip()
+        df[col] = df[col].replace("nan", None)
+
+    # Дата увольнения — может быть строкой "01.03.2024" или датой
     if EMP_COLS["fire_date"] in df.columns:
-        df[EMP_COLS["fire_date"]] = pd.to_datetime(df[EMP_COLS["fire_date"]], errors="coerce")
+        df[EMP_COLS["fire_date"]] = pd.to_datetime(
+            df[EMP_COLS["fire_date"]], dayfirst=True, errors="coerce"
+        )
+
     df[EMP_COLS["emp_id"]] = df[EMP_COLS["emp_id"]].astype(str).str.strip()
+
     df["full_name"] = (
         df[EMP_COLS["last_name"]].fillna("") + " " +
         df[EMP_COLS["first_name"]].fillna("") + " " +
         df[EMP_COLS["middle_name"]].fillna("")
     ).str.strip()
+
     return df
 
 @st.cache_data(show_spinner=False)
 def load_transactions(path):
     df = pd.read_excel(path, engine="openpyxl")
     df.columns = [c.strip() for c in df.columns]
-    df[TX_COLS["time"]] = pd.to_datetime(df[TX_COLS["time"]], errors="coerce")
+
+    # Парсим дату — в файле есть отдельная колонка "Дата"
+    if "Дата" in df.columns:
+        df["dt"] = pd.to_datetime(df["Дата"], dayfirst=True, errors="coerce")
+    elif TX_COLS["time"] in df.columns:
+        df["dt"] = pd.to_datetime(df[TX_COLS["time"]], errors="coerce")
+    else:
+        df["dt"] = pd.NaT
+
     df[TX_COLS["merits"]] = pd.to_numeric(df[TX_COLS["merits"]], errors="coerce").fillna(0).astype(int)
     df[TX_COLS["sender_id"]] = df[TX_COLS["sender_id"]].astype(str).str.strip()
     df[TX_COLS["receiver_id"]] = df[TX_COLS["receiver_id"]].astype(str).str.strip()
+
+    # Ценности — убираем лишние пробелы и приводим к нижнему регистру
+    if TX_COLS["value"] in df.columns:
+        df[TX_COLS["value"]] = df[TX_COLS["value"]].astype(str).str.strip()
+
     return df
 
 def merge_data(tx_df, emp_df):
     """Объединяем транзакции с данными сотрудников"""
     emp_map = emp_df.set_index(EMP_COLS["emp_id"])
 
+    lookup_cols = ["full_name", EMP_COLS["position"], EMP_COLS["company"], EMP_COLS["dept"]]
+
     def enrich(df, id_col, prefix):
-        for col in ["full_name", EMP_COLS["position"], EMP_COLS["company"], EMP_COLS["dept"]]:
-            df[f"{prefix}_{col}"] = df[id_col].map(emp_map[col] if col in emp_map.columns else {})
+        for col in lookup_cols:
+            if col in emp_map.columns:
+                df[f"{prefix}_{col}"] = df[id_col].map(emp_map[col])
+            else:
+                df[f"{prefix}_{col}"] = None
         return df
 
     tx_df = enrich(tx_df, TX_COLS["sender_id"], "sender")
     tx_df = enrich(tx_df, TX_COLS["receiver_id"], "receiver")
 
-    # Добавляем дату увольнения
-    tx_df["sender_fire"] = tx_df[TX_COLS["sender_id"]].map(emp_map.get(EMP_COLS["fire_date"], {}))
-    tx_df["receiver_fire"] = tx_df[TX_COLS["receiver_id"]].map(emp_map.get(EMP_COLS["fire_date"], {}))
+    # Дата увольнения
+    if EMP_COLS["fire_date"] in emp_map.columns:
+        tx_df["sender_fire"]   = tx_df[TX_COLS["sender_id"]].map(emp_map[EMP_COLS["fire_date"]])
+        tx_df["receiver_fire"] = tx_df[TX_COLS["receiver_id"]].map(emp_map[EMP_COLS["fire_date"]])
 
-    tx_df["year"] = tx_df[TX_COLS["time"]].dt.year
-    tx_df["month"] = tx_df[TX_COLS["time"]].dt.month
+    # Год и месяц берём из колонки dt (создана в load_transactions)
+    tx_df["year"]  = tx_df["dt"].dt.year
+    tx_df["month"] = tx_df["dt"].dt.month
 
     return tx_df
 
