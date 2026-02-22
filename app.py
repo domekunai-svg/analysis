@@ -239,7 +239,9 @@ def load_employees(path):
             df[EMP_COLS["fire_date"]], dayfirst=True, errors="coerce"
         )
 
-    df[EMP_COLS["emp_id"]] = df[EMP_COLS["emp_id"]].astype(str).str.strip()
+    # Конвертируем ID: если float64 (NaN в Excel) -> int -> str без .0
+    df[EMP_COLS["emp_id"]] = (pd.to_numeric(df[EMP_COLS["emp_id"]], errors="coerce")
+                               .fillna(-1).astype(int).astype(str).str.strip())
 
     df["full_name"] = (
         df[EMP_COLS["last_name"]].fillna("") + " " +
@@ -263,8 +265,16 @@ def load_transactions(path):
         df["dt"] = pd.NaT
 
     df[TX_COLS["merits"]] = pd.to_numeric(df[TX_COLS["merits"]], errors="coerce").fillna(0).astype(int)
-    df[TX_COLS["sender_id"]] = df[TX_COLS["sender_id"]].astype(str).str.strip()
-    df[TX_COLS["receiver_id"]] = df[TX_COLS["receiver_id"]].astype(str).str.strip()
+    # Конвертируем ID: если float (из-за NaN в Excel) -> убираем .0, потом в строку
+    def id_to_str(series):
+        return (pd.to_numeric(series, errors="coerce")
+                .dropna()
+                .astype(int)
+                .astype(str))
+    df[TX_COLS["sender_id"]]   = pd.to_numeric(df[TX_COLS["sender_id"]],   errors="coerce").fillna(-1).astype(int).astype(str).str.strip()
+    df[TX_COLS["receiver_id"]] = pd.to_numeric(df[TX_COLS["receiver_id"]], errors="coerce").fillna(-1).astype(int).astype(str).str.strip()
+    # Убираем строки с невалидными ID (-1)
+    df = df[(df[TX_COLS["sender_id"]] != "-1") & (df[TX_COLS["receiver_id"]] != "-1")]
 
     # Ценности — убираем лишние пробелы и приводим к нижнему регистру
     if TX_COLS["value"] in df.columns:
@@ -1137,12 +1147,12 @@ def main():
         st.write(f"**employees.xlsx:** {len(emp_df)} строк")
         st.write(f"**dataset.xlsx (raw):** {len(tx_raw)} строк")
         st.write(f"**После merge:** {len(tx_df)} строк")
-        st.write(f"**Колонки tx_df:** {list(tx_df.columns)}")
+        st.write(f"**ID отправителя (тип / примеры):** {tx_raw[TX_COLS['sender_id']].dtype} / {tx_raw[TX_COLS['sender_id']].head(3).tolist()}")
+        st.write(f"**ID после конвертации:** {tx_df[TX_COLS['sender_id']].head(3).tolist()}")
+        st.write(f"**emp_id примеры:** {emp_df[EMP_COLS['emp_id']].head(3).tolist()}")
         st.write(f"**Годы в данных:** {sorted(tx_df['year'].dropna().unique().astype(int).tolist())}")
-        st.write(f"**Месяцы в данных:** {sorted(tx_df['month'].dropna().unique().astype(int).tolist())}")
-        st.write(f"**Уникальные компании:** {tx_df['sender_Компания'].dropna().unique().tolist()}")
-        st.write(f"**sender_Компания NaN:** {tx_df['sender_Компания'].isna().sum()}")
-        st.write("**Первые 3 строки tx_df:**")
+        st.write(f"**sender_Компания NaN:** {tx_df['sender_Компания'].isna().sum()} / {len(tx_df)}")
+        st.write(f"**Уникальные компании:** {tx_df['sender_Компания'].dropna().unique().tolist()[:5]}")
         st.dataframe(tx_df.head(3))
 
     # --- Фильтры ---
