@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-СоциоГраф 6.0
+СоциоГраф 6.0 — РАД КОП
 Два источника данных: employees.xlsx + dataset.xlsx
 """
 
@@ -17,7 +17,7 @@ import streamlit.components.v1 as components
 from scipy.spatial.distance import pdist, squareform
 
 st.set_page_config(
-    page_title="СоциоГраф",
+    page_title="СоциоГраф — РАД КОП",
     page_icon="🕸️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -196,28 +196,30 @@ st.markdown("""
 
 # ========================= КОНСТАНТЫ =========================
 
-TOTAL_COMPANY_EMPLOYEES = 1145  # Для показателя лояльности
-MERITS_PER_MONTH = 10           # Голосов в месяц на участника
+# РАДКОП: штатных сотрудников кооператива ~45
+TOTAL_COMPANY_EMPLOYEES = 45
+MERITS_PER_MONTH = 10
 
 EMP_COLS = {
-    "last_name": "Фамилия",
+    "last_name":  "Фамилия",
     "first_name": "Имя",
-    "middle_name": "Отчество",
-    "gender": "Пол",
-    "emp_id": "Персональный номер",
-    "position": "Должность",
-    "company": "Компания",
-    "dept": "Отдел",
-    "fire_date": "Дата увольнения",
+    "middle_name":"Отчество",
+    "gender":     "Пол",
+    "emp_id":     "Персональный номер",
+    "position":   "Должность",
+    "company":    "Компания",
+    "dept":       "Отдел",        # Специалист / Ядро / Пайщик
+    "circle":     "Круг",         # Круг хакеров, Круг комплаенса и т.д.
+    "fire_date":  "Дата увольнения",
 }
 
 TX_COLS = {
-    "time": "Время",
-    "sender_id": "Номер отправителя",
+    "time":        "Время",
+    "sender_id":   "Номер отправителя",
     "receiver_id": "Номер получателя",
-    "value": "Ценность",
-    "merits": "Мериты",
-    "comment": "Комментарий",
+    "value":       "Ценность",
+    "merits":      "Мериты",
+    "comment":     "Комментарий",
 }
 
 
@@ -228,20 +230,19 @@ def load_employees(path):
     df = pd.read_excel(path, engine="openpyxl")
     df.columns = [c.strip() for c in df.columns]
 
-    # Убираем пробелы во всех строковых колонках (решает 'БЕЛАРУСЬ АКВАТЕРМЕКС ')
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip()
         df[col] = df[col].replace("nan", None)
 
-    # Дата увольнения — может быть строкой "01.03.2024" или датой
     if EMP_COLS["fire_date"] in df.columns:
         df[EMP_COLS["fire_date"]] = pd.to_datetime(
             df[EMP_COLS["fire_date"]], dayfirst=True, errors="coerce"
         )
 
-    # Конвертируем ID: если float64 (NaN в Excel) -> int -> str без .0
-    df[EMP_COLS["emp_id"]] = (pd.to_numeric(df[EMP_COLS["emp_id"]], errors="coerce")
-                               .fillna(-1).astype(int).astype(str).str.strip())
+    df[EMP_COLS["emp_id"]] = (
+        pd.to_numeric(df[EMP_COLS["emp_id"]], errors="coerce")
+        .fillna(-1).astype(int).astype(str).str.strip()
+    )
 
     df["full_name"] = (
         df[EMP_COLS["last_name"]].fillna("") + " " +
@@ -251,12 +252,12 @@ def load_employees(path):
 
     return df
 
+
 @st.cache_data(show_spinner=False)
 def load_transactions(path):
     df = pd.read_excel(path, engine="openpyxl")
     df.columns = [c.strip() for c in df.columns]
 
-    # Парсим дату — в файле есть отдельная колонка "Дата"
     if "Дата" in df.columns:
         df["dt"] = pd.to_datetime(df["Дата"], dayfirst=True, errors="coerce")
     elif TX_COLS["time"] in df.columns:
@@ -264,29 +265,36 @@ def load_transactions(path):
     else:
         df["dt"] = pd.NaT
 
-    df[TX_COLS["merits"]] = pd.to_numeric(df[TX_COLS["merits"]], errors="coerce").fillna(0).astype(int)
-    # Конвертируем ID: если float (из-за NaN в Excel) -> убираем .0, потом в строку
-    def id_to_str(series):
-        return (pd.to_numeric(series, errors="coerce")
-                .dropna()
-                .astype(int)
-                .astype(str))
-    df[TX_COLS["sender_id"]]   = pd.to_numeric(df[TX_COLS["sender_id"]],   errors="coerce").fillna(-1).astype(int).astype(str).str.strip()
-    df[TX_COLS["receiver_id"]] = pd.to_numeric(df[TX_COLS["receiver_id"]], errors="coerce").fillna(-1).astype(int).astype(str).str.strip()
-    # Убираем строки с невалидными ID (-1)
+    df[TX_COLS["merits"]] = (
+        pd.to_numeric(df[TX_COLS["merits"]], errors="coerce").fillna(0).astype(int)
+    )
+    df[TX_COLS["sender_id"]] = (
+        pd.to_numeric(df[TX_COLS["sender_id"]], errors="coerce")
+        .fillna(-1).astype(int).astype(str).str.strip()
+    )
+    df[TX_COLS["receiver_id"]] = (
+        pd.to_numeric(df[TX_COLS["receiver_id"]], errors="coerce")
+        .fillna(-1).astype(int).astype(str).str.strip()
+    )
     df = df[(df[TX_COLS["sender_id"]] != "-1") & (df[TX_COLS["receiver_id"]] != "-1")]
 
-    # Ценности — убираем лишние пробелы и приводим к нижнему регистру
     if TX_COLS["value"] in df.columns:
         df[TX_COLS["value"]] = df[TX_COLS["value"]].astype(str).str.strip()
 
     return df
 
+
 def merge_data(tx_df, emp_df):
-    """Объединяем транзакции с данными сотрудников"""
     emp_map = emp_df.set_index(EMP_COLS["emp_id"])
 
-    lookup_cols = ["full_name", EMP_COLS["position"], EMP_COLS["company"], EMP_COLS["dept"]]
+    # Колонки для обогащения транзакций данными сотрудника
+    lookup_cols = [
+        "full_name",
+        EMP_COLS["position"],
+        EMP_COLS["company"],
+        EMP_COLS["dept"],
+        EMP_COLS["circle"],   # <- Круг
+    ]
 
     def enrich(df, id_col, prefix):
         for col in lookup_cols:
@@ -296,15 +304,13 @@ def merge_data(tx_df, emp_df):
                 df[f"{prefix}_{col}"] = None
         return df
 
-    tx_df = enrich(tx_df, TX_COLS["sender_id"], "sender")
+    tx_df = enrich(tx_df, TX_COLS["sender_id"],   "sender")
     tx_df = enrich(tx_df, TX_COLS["receiver_id"], "receiver")
 
-    # Дата увольнения
     if EMP_COLS["fire_date"] in emp_map.columns:
         tx_df["sender_fire"]   = tx_df[TX_COLS["sender_id"]].map(emp_map[EMP_COLS["fire_date"]])
         tx_df["receiver_fire"] = tx_df[TX_COLS["receiver_id"]].map(emp_map[EMP_COLS["fire_date"]])
 
-    # Год и месяц берём из колонки dt (создана в load_transactions)
     tx_df["year"]  = tx_df["dt"].dt.year
     tx_df["month"] = tx_df["dt"].dt.month
 
@@ -316,17 +322,19 @@ def merge_data(tx_df, emp_df):
 def sidebar_controls(tx_df, emp_df):
     st.sidebar.markdown("## ⚙️ Фильтры")
 
-    # --- ГОД ---
+    # --- ПЕРИОД ---
     st.sidebar.markdown('<div class="sidebar-section">Период</div>', unsafe_allow_html=True)
     years = sorted(tx_df["year"].dropna().unique().astype(int).tolist())
     selected_years = st.sidebar.multiselect("Год", options=years, default=years)
 
-    months_map = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
-                  7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    months_map = {
+        1:"Январь", 2:"Февраль", 3:"Март", 4:"Апрель",
+        5:"Май", 6:"Июнь", 7:"Июль", 8:"Август",
+        9:"Сентябрь", 10:"Октябрь", 11:"Ноябрь", 12:"Декабрь"
+    }
     months_present = sorted(tx_df["month"].dropna().unique().astype(int).tolist())
     selected_months = st.sidebar.multiselect(
-        "Месяц",
-        options=months_present,
+        "Месяц", options=months_present,
         format_func=lambda x: months_map.get(x, str(x)),
         default=months_present
     )
@@ -336,31 +344,38 @@ def sidebar_controls(tx_df, emp_df):
     values_list = sorted(tx_df[TX_COLS["value"]].dropna().unique().tolist())
     selected_values = st.sidebar.multiselect("Ценности", options=values_list, default=values_list)
 
-    # --- КОМПАНИЯ ---
-    st.sidebar.markdown('<div class="sidebar-section">Организация</div>', unsafe_allow_html=True)
-    companies = sorted(emp_df[EMP_COLS["company"]].dropna().unique().tolist())
-    selected_companies = st.sidebar.multiselect("Компания", options=companies, default=companies)
+    # --- КРУГ (вместо Компании) ---
+    st.sidebar.markdown('<div class="sidebar-section">Круг</div>', unsafe_allow_html=True)
+    circles_all = sorted(
+        emp_df[EMP_COLS["circle"]].dropna().unique().tolist()
+    )
+    selected_circles = st.sidebar.multiselect("Круг", options=circles_all, default=circles_all)
 
+    # --- ОТДЕЛ (Специалист / Ядро / Пайщик) ---
+    st.sidebar.markdown('<div class="sidebar-section">Уровень</div>', unsafe_allow_html=True)
     depts_all = sorted(emp_df[EMP_COLS["dept"]].dropna().unique().tolist())
-    selected_depts = st.sidebar.multiselect("Отдел", options=depts_all, default=depts_all)
+    selected_depts = st.sidebar.multiselect("Уровень", options=depts_all, default=depts_all)
 
+    # --- СОТРУДНИКИ ---
+    st.sidebar.markdown('<div class="sidebar-section">Сотрудники</div>', unsafe_allow_html=True)
     emps_all = sorted(emp_df["full_name"].dropna().unique().tolist())
     selected_emps = st.sidebar.multiselect("Сотрудники", options=emps_all, default=[])
 
     # --- ГРАФ ---
     st.sidebar.markdown('<div class="sidebar-section">Граф</div>', unsafe_allow_html=True)
+    # РАДКОП: два варианта группировки — Круг или Уровень (Отдел)
     graph_group = st.sidebar.radio(
         "Группировка графа",
-        options=["По компаниям", "По отделам"],
-        index=1
+        options=["По кругам", "По уровням"],
+        index=0
     )
 
-    # Считаем реальный максимум суммарных меритов между парами
     try:
-        pair_merits = (tx_df.groupby([TX_COLS["sender_id"], TX_COLS["receiver_id"]])[TX_COLS["merits"]]
-                       .sum())
+        pair_merits = (
+            tx_df.groupby([TX_COLS["sender_id"], TX_COLS["receiver_id"]])[TX_COLS["merits"]].sum()
+        )
         real_max = max(int(pair_merits.max()), 10)
-    except:
+    except Exception:
         real_max = 500
 
     merit_range = st.sidebar.slider(
@@ -371,14 +386,14 @@ def sidebar_controls(tx_df, emp_df):
     )
 
     return {
-        "years": set(selected_years),
-        "months": set(selected_months),
-        "values": set(selected_values),
-        "companies": set(selected_companies),
-        "depts": set(selected_depts),
-        "emps": set(selected_emps),
-        "graph_group": graph_group,
-        "merit_range": merit_range,
+        "years":        set(selected_years),
+        "months":       set(selected_months),
+        "values":       set(selected_values),
+        "circles":      set(selected_circles),   # <- вместо companies
+        "depts":        set(selected_depts),
+        "emps":         set(selected_emps),
+        "graph_group":  graph_group,
+        "merit_range":  merit_range,
     }
 
 
@@ -392,16 +407,23 @@ def apply_filters(tx_df, emp_df, cfg):
     if cfg["values"]:
         df = df[df[TX_COLS["value"]].isin(cfg["values"])]
 
-    # Фильтр по компании (через отправителя)
-    if cfg["companies"]:
-        sender_company_col = f"sender_{EMP_COLS['company']}"
-        if sender_company_col in df.columns:
-            df = df[df[sender_company_col].isin(cfg["companies"])]
+    # Фильтр по кругу отправителя
+    if cfg["circles"]:
+        sender_circle_col = f"sender_{EMP_COLS['circle']}"
+        if sender_circle_col in df.columns:
+            df = df[
+                df[sender_circle_col].isin(cfg["circles"]) |
+                df[sender_circle_col].isna()
+            ]
 
+    # Фильтр по уровню (Отдел: Специалист/Ядро/Пайщик)
     if cfg["depts"]:
         sender_dept_col = f"sender_{EMP_COLS['dept']}"
         if sender_dept_col in df.columns:
-            df = df[df[sender_dept_col].isin(cfg["depts"])]
+            df = df[
+                df[sender_dept_col].isin(cfg["depts"]) |
+                df[sender_dept_col].isna()
+            ]
 
     if cfg["emps"]:
         sender_name_col = "sender_full_name"
@@ -414,18 +436,17 @@ def apply_filters(tx_df, emp_df, cfg):
 # ========================= МЕТРИКИ =========================
 
 def compute_kpis(tx_df, emp_df, filtered_df):
-    """Вычисляем 6 KPI (без учёта уволенных)"""
-    # Активные сотрудники (без даты увольнения)
     active_emp = emp_df[emp_df[EMP_COLS["fire_date"]].isna()]
-    n_active = len(active_emp)
+    n_active   = len(active_emp)
     active_ids = set(active_emp[EMP_COLS["emp_id"]].astype(str))
 
-    # Участники программы = активные сотрудники, встречающиеся в транзакциях
-    all_tx_ids = set(tx_df[TX_COLS["sender_id"]].astype(str)) | set(tx_df[TX_COLS["receiver_id"]].astype(str))
+    all_tx_ids  = (
+        set(tx_df[TX_COLS["sender_id"]].astype(str)) |
+        set(tx_df[TX_COLS["receiver_id"]].astype(str))
+    )
     program_ids = active_ids & all_tx_ids
-    n_program = len(program_ids)
+    n_program   = len(program_ids)
 
-    # Из отфильтрованных транзакций (активные)
     fd = filtered_df[
         filtered_df[TX_COLS["sender_id"]].isin(active_ids) &
         filtered_df[TX_COLS["receiver_id"]].isin(active_ids)
@@ -434,36 +455,26 @@ def compute_kpis(tx_df, emp_df, filtered_df):
     sender_counts = fd.groupby(TX_COLS["sender_id"]).size()
     receivers_set = set(fd[TX_COLS["receiver_id"]].unique())
 
-    n_senders = (sender_counts >= 1).sum()
-    n_senders_gt1 = (sender_counts > 1).sum()
-    n_receivers = len(receivers_set)
-    total_merits = fd[TX_COLS["merits"]].sum()
+    n_senders      = (sender_counts >= 1).sum()
+    n_senders_gt1  = (sender_counts > 1).sum()
+    n_receivers    = len(receivers_set)
+    total_merits   = fd[TX_COLS["merits"]].sum()
 
-    involved = set(fd[TX_COLS["sender_id"]].unique()) | receivers_set
+    involved   = set(fd[TX_COLS["sender_id"]].unique()) | receivers_set
     n_involved = len(involved)
 
-    # 1. Доля вовлечённости
-    kpi1 = round(n_involved / n_program * 100, 1) if n_program > 0 else 0
-
-    # 2. Показатель лояльности
+    kpi1 = round(n_involved   / n_program * 100, 1) if n_program > 0 else 0
     kpi2 = round(n_senders_gt1 / TOTAL_COMPANY_EMPLOYEES * 100, 1)
+    kpi3 = round(n_senders    / n_program * 100, 1) if n_program > 0 else 0
 
-    # 3. ER (вовлечённость в программу)
-    kpi3 = round(n_senders / n_program * 100, 1) if n_program > 0 else 0
-
-    # 4. Голосов использовано — считаем кол-во месяцев * участников * 10
     if len(fd) > 0 and "year" in fd.columns and "month" in fd.columns:
-        period_months = fd[["year","month"]].drop_duplicates().shape[0]
+        period_months = fd[["year", "month"]].drop_duplicates().shape[0]
     else:
         period_months = 1
     emitted = n_program * MERITS_PER_MONTH * period_months
     kpi4 = round(total_merits / emitted * 100, 1) if emitted > 0 else 0
-
-    # 5. Степень полезности
-    kpi5 = round(total_merits / n_receivers, 1) if n_receivers > 0 else 0
-
-    # 6. Степень активности
-    kpi6 = round(total_merits / n_senders, 1) if n_senders > 0 else 0
+    kpi5 = round(total_merits / n_receivers,    1) if n_receivers > 0 else 0
+    kpi6 = round(total_merits / n_senders,      1) if n_senders   > 0 else 0
 
     return {
         "kpi1": kpi1, "kpi2": kpi2, "kpi3": kpi3,
@@ -478,18 +489,24 @@ def render_kpis(kpis):
     st.markdown('<div class="section-header">Ключевые метрики программы</div>', unsafe_allow_html=True)
 
     tooltips = [
-        ("Доля вовлечённости", f"{kpis['kpi1']}%",
-         "Показывает насколько полно сотрудники используют возможности для позитивной оценки коллег. Отношение вовлечённых к участникам программы."),
-        ("Показатель лояльности", f"{kpis['kpi2']}%",
-         f"Процент отправителей (>1 благодарности) от всех {TOTAL_COMPANY_EMPLOYEES} сотрудников компании. Отражает вовлечение в культуру благодарения."),
-        ("Вовлечённость в программу", f"{kpis['kpi3']}%",
-         "Показатель отражает активную позицию участников программы. Отношение отправителей хотя бы одной благодарности к числу участников 3Д."),
-        ("Голосов использовано", f"{kpis['kpi4']}%",
-         "Насколько полно используются возможности для оценки коллег. Отношение использованных голосов к общему числу эмитированных за период."),
-        ("Степень полезности", f"{kpis['kpi5']}",
-         "Среднее количество голосов, полученное сотрудником. Отношение суммы баллов к числу получивших хотя бы 1 благодарность."),
-        ("Степень активности", f"{kpis['kpi6']}",
-         "Среднее количество голосов, переданных сотрудником в качестве благодарности. Отношение суммы баллов к числу отправивших хотя бы 1 благодарность."),
+        ("Доля вовлечённости",          f"{kpis['kpi1']}%",
+         "Показывает насколько полно сотрудники используют возможности для позитивной оценки коллег. "
+         "Отношение вовлечённых к участникам программы."),
+        ("Показатель лояльности",       f"{kpis['kpi2']}%",
+         f"Процент отправителей (>1 благодарности) от всех {TOTAL_COMPANY_EMPLOYEES} штатных сотрудников кооператива. "
+         "Отражает вовлечение в культуру благодарения."),
+        ("Вовлечённость в программу",   f"{kpis['kpi3']}%",
+         "Показатель отражает активную позицию участников программы. "
+         "Отношение отправителей хотя бы одной благодарности к числу участников 3Д."),
+        ("Голосов использовано",        f"{kpis['kpi4']}%",
+         "Насколько полно используются возможности для оценки коллег. "
+         "Отношение использованных голосов к общему числу эмитированных за период."),
+        ("Степень полезности",          f"{kpis['kpi5']}",
+         "Среднее количество голосов, полученное сотрудником. "
+         "Отношение суммы баллов к числу получивших хотя бы 1 благодарность."),
+        ("Степень активности",          f"{kpis['kpi6']}",
+         "Среднее количество голосов, переданных сотрудником в качестве благодарности. "
+         "Отношение суммы баллов к числу отправивших хотя бы 1 благодарность."),
     ]
 
     cols = st.columns(6)
@@ -514,12 +531,12 @@ def render_tops(filtered_df, emp_df):
             r = emp_map.loc[emp_id]
             name = f"{r.get(EMP_COLS['last_name'],'')} {r.get(EMP_COLS['first_name'],'')}".strip()
             return {
-                "ФИО": name,
+                "ФИО":      name,
                 "Должность": r.get(EMP_COLS["position"], ""),
-                "Отдел": r.get(EMP_COLS["dept"], ""),
-                "Компания": r.get(EMP_COLS["company"], ""),
+                "Круг":     r.get(EMP_COLS["circle"],   ""),
+                "Уровень":  r.get(EMP_COLS["dept"],     ""),
             }
-        return {"ФИО": emp_id, "Должность": "", "Отдел": "", "Компания": ""}
+        return {"ФИО": emp_id, "Должность": "", "Круг": "", "Уровень": ""}
 
     st.markdown('<div class="section-header">Топ сотрудников</div>', unsafe_allow_html=True)
 
@@ -528,12 +545,11 @@ def render_tops(filtered_df, emp_df):
         "🚀 Активность (отправлено меритов)",
         "👥 Охват — получили от стольких",
         "📣 Охват — поблагодарили стольких",
-        "🎯 Топ по ценностям"
+        "🎯 Топ по ценностям",
     ])
 
     N = 20
 
-    # --- Полезность ---
     with tab1:
         recv = (filtered_df.groupby(TX_COLS["receiver_id"])[TX_COLS["merits"]]
                 .sum().reset_index().sort_values(TX_COLS["merits"], ascending=False).head(N))
@@ -543,7 +559,6 @@ def render_tops(filtered_df, emp_df):
             rows.append({"#": rank, **info, "Мериты": int(row[TX_COLS["merits"]])})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # --- Активность ---
     with tab2:
         sent = (filtered_df.groupby(TX_COLS["sender_id"])[TX_COLS["merits"]]
                 .sum().reset_index().sort_values(TX_COLS["merits"], ascending=False).head(N))
@@ -553,7 +568,6 @@ def render_tops(filtered_df, emp_df):
             rows.append({"#": rank, **info, "Мериты": int(row[TX_COLS["merits"]])})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # --- Охват: получили от стольких ---
     with tab3:
         reach_recv = (filtered_df.groupby(TX_COLS["receiver_id"])[TX_COLS["sender_id"]]
                       .nunique().reset_index()
@@ -567,7 +581,6 @@ def render_tops(filtered_df, emp_df):
             rows.append({"#": rank, **info, "Уник. отправителей": int(row["Уникальных отправителей"])})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # --- Охват: поблагодарили стольких ---
     with tab4:
         reach_sent = (filtered_df.groupby(TX_COLS["sender_id"])[TX_COLS["receiver_id"]]
                       .nunique().reset_index()
@@ -581,8 +594,6 @@ def render_tops(filtered_df, emp_df):
             rows.append({"#": rank, **info, "Уник. получателей": int(row["Уникальных получателей"])})
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-
-    # --- Топ по ценностям ---
     with tab5:
         val_counts = (filtered_df.groupby(TX_COLS["value"])
                       .agg(
@@ -592,25 +603,23 @@ def render_tops(filtered_df, emp_df):
                       .reset_index()
                       .rename(columns={TX_COLS["value"]: "Ценность"})
                       .sort_values("Меритов", ascending=False))
-        val_counts["Доля меритов, %"] = (
-            val_counts["Меритов"] / val_counts["Меритов"].sum() * 100
-        ).round(1)
-        val_counts["Доля транзакций, %"] = (
-            val_counts["Транзакций"] / val_counts["Транзакций"].sum() * 100
-        ).round(1)
+        val_counts["Доля меритов, %"]     = (val_counts["Меритов"]     / val_counts["Меритов"].sum()     * 100).round(1)
+        val_counts["Доля транзакций, %"]  = (val_counts["Транзакций"]  / val_counts["Транзакций"].sum()  * 100).round(1)
         val_counts.insert(0, "#", range(1, len(val_counts) + 1))
         st.dataframe(val_counts, use_container_width=True, hide_index=True)
 
 
 # ========================= ПОСТРОЕНИЕ ГРАФОВ =========================
 
-def build_graph(tx_df, emp_df, group_by, merit_range):
-    """group_by: 'company' или 'dept'"""
+def build_graph(tx_df, emp_df, graph_group, merit_range):
+    """
+    graph_group: 'По кругам' | 'По уровням'
+    """
     emp_map = emp_df.set_index(EMP_COLS["emp_id"])
 
-    group_col = EMP_COLS["company"] if group_by == "По компаниям" else EMP_COLS["dept"]
+    # Выбираем поле группировки
+    group_col = EMP_COLS["circle"] if graph_group == "По кругам" else EMP_COLS["dept"]
 
-    # Агрегация по парам sender-receiver
     agg = (tx_df.groupby([TX_COLS["sender_id"], TX_COLS["receiver_id"]])
            .agg(total_merits=(TX_COLS["merits"], "sum"), n_tx=(TX_COLS["merits"], "count"))
            .reset_index())
@@ -618,7 +627,6 @@ def build_graph(tx_df, emp_df, group_by, merit_range):
     min_m, max_m = merit_range
     agg = agg[(agg["total_merits"] >= min_m) & (agg["total_merits"] <= max_m)]
 
-    # Граф людей
     G_people = nx.DiGraph()
     for _, row in agg.iterrows():
         sid, rid = row[TX_COLS["sender_id"]], row[TX_COLS["receiver_id"]]
@@ -629,14 +637,21 @@ def build_graph(tx_df, emp_df, group_by, merit_range):
             if eid in emp_map.index:
                 r = emp_map.loc[eid]
                 name = f"{r.get(EMP_COLS['last_name'],'')} {r.get(EMP_COLS['first_name'],'')[:1]}.".strip()
+                circle = str(r.get(EMP_COLS["circle"], "") or "")
+                dept   = str(r.get(EMP_COLS["dept"],   "") or "")
+                group_val = circle if graph_group == "По кругам" else dept
                 return {
-                    "label": name,
-                    "dept": str(r.get(EMP_COLS["dept"], "")),
-                    "company": str(r.get(EMP_COLS["company"], "")),
-                    "position": str(r.get(EMP_COLS["position"], "")),
-                    "group": str(r.get(group_col, "")),
+                    "label":    name,
+                    "dept":     dept,
+                    "circle":   circle,
+                    "company":  str(r.get(EMP_COLS["company"], "") or ""),
+                    "position": str(r.get(EMP_COLS["position"], "") or ""),
+                    "group":    group_val or "Без группы",
                 }
-            return {"label": eid, "dept": "", "company": "", "position": "", "group": ""}
+            return {
+                "label": eid, "dept": "", "circle": "",
+                "company": "", "position": "", "group": "Без группы",
+            }
 
         if sid not in G_people:
             G_people.add_node(sid, **node_attrs(sid))
@@ -644,7 +659,7 @@ def build_graph(tx_df, emp_df, group_by, merit_range):
             G_people.add_node(rid, **node_attrs(rid))
 
         w = float(row["total_merits"])
-        G_people.add_edge(sid, rid, weight=w, length=1.0/max(w,0.01), msgs=int(row["n_tx"]))
+        G_people.add_edge(sid, rid, weight=w, length=1.0/max(w, 0.01), msgs=int(row["n_tx"]))
 
     # Граф групп
     group_agg = {}
@@ -654,15 +669,13 @@ def build_graph(tx_df, emp_df, group_by, merit_range):
         key = (gu, gv)
         if key not in group_agg:
             group_agg[key] = {"weight": 0, "people": 0}
-        group_agg[key]["weight"] += data["weight"]
-        group_agg[key]["people"] += 1
+        group_agg[key]["weight"]  += data["weight"]
+        group_agg[key]["people"]  += 1
 
     group_members = {}
     for node in G_people.nodes():
         g = G_people.nodes[node].get("group", "")
-        if g not in group_members:
-            group_members[g] = []
-        group_members[g].append(node)
+        group_members.setdefault(g, []).append(node)
 
     G_groups = nx.DiGraph()
     for g, members in group_members.items():
@@ -681,36 +694,36 @@ def calculate_graph_metrics(G):
     if G.number_of_nodes() == 0:
         return {}
     metrics = {}
-    metrics["in_strength"] = dict(G.in_degree(weight="weight"))
+    metrics["in_strength"]  = dict(G.in_degree(weight="weight"))
     metrics["out_strength"] = dict(G.out_degree(weight="weight"))
     try:
         metrics["pagerank"] = nx.pagerank(G, weight="weight", max_iter=100)
-    except:
+    except Exception:
         metrics["pagerank"] = {n: 1.0/G.number_of_nodes() for n in G.nodes()}
     UG = G.to_undirected()
     try:
         metrics["betweenness"] = nx.betweenness_centrality(UG, weight="length", normalized=True)
-    except:
+    except Exception:
         metrics["betweenness"] = {n: 0.0 for n in G.nodes()}
     try:
         metrics["closeness"] = nx.closeness_centrality(UG, distance="length")
-    except:
+    except Exception:
         metrics["closeness"] = {n: 0.0 for n in G.nodes()}
     try:
         metrics["clustering"] = nx.clustering(UG, weight="weight")
-    except:
+    except Exception:
         metrics["clustering"] = {n: 0.0 for n in G.nodes()}
     try:
         metrics["eigenvector"] = nx.eigenvector_centrality(UG, weight="weight", max_iter=200)
-    except:
+    except Exception:
         metrics["eigenvector"] = {n: 0.0 for n in G.nodes()}
     try:
         metrics["constraint"] = nx.constraint(UG, weight="weight")
-    except:
+    except Exception:
         metrics["constraint"] = {n: 0.0 for n in G.nodes()}
     try:
         metrics["core_number"] = nx.core_number(UG)
-    except:
+    except Exception:
         metrics["core_number"] = {n: 0 for n in G.nodes()}
     try:
         bridges = list(nx.bridges(UG))
@@ -718,29 +731,30 @@ def calculate_graph_metrics(G):
         for a, b in bridges:
             bridge_nodes.add(a); bridge_nodes.add(b)
         metrics["is_bridge"] = {n: 1 if n in bridge_nodes else 0 for n in G.nodes()}
-    except:
+    except Exception:
         metrics["is_bridge"] = {n: 0 for n in G.nodes()}
     try:
         metrics["load"] = nx.load_centrality(UG, weight="length")
-    except:
+    except Exception:
         metrics["load"] = {n: 0.0 for n in G.nodes()}
-    dept_diversity = {}
+    # Разнообразие кругов в связях (вместо dept_diversity — circle_diversity)
+    circle_diversity = {}
     for node in G.nodes():
         neighbors = set(G.neighbors(node)) | set(G.predecessors(node))
         if len(neighbors) == 0:
-            dept_diversity[node] = 0.0
+            circle_diversity[node] = 0.0
         else:
-            depts = set(G.nodes[n].get("dept","") for n in neighbors)
-            dept_diversity[node] = len(depts) / len(neighbors)
-    metrics["dept_diversity"] = dept_diversity
+            circles = set(G.nodes[n].get("circle", "") for n in neighbors)
+            circle_diversity[node] = len(circles) / len(neighbors)
+    metrics["dept_diversity"] = circle_diversity
     try:
         part = community_louvain.best_partition(UG, weight="weight")
-        mod = community_louvain.modularity(part, UG, weight="weight")
+        mod  = community_louvain.modularity(part, UG, weight="weight")
         metrics["communities"] = part
-        metrics["modularity"] = mod
-    except:
+        metrics["modularity"]  = mod
+    except Exception:
         metrics["communities"] = {n: 0 for n in G.nodes()}
-        metrics["modularity"] = 0.0
+        metrics["modularity"]  = 0.0
     metrics["reciprocity"] = nx.reciprocity(G) if G.number_of_edges() > 0 else 0.0
     return metrics
 
@@ -750,27 +764,26 @@ def calculate_graph_metrics(G):
 def create_social_graph_viz(G, metrics):
     nodes_data = []
     for node in G.nodes():
-        nd = G.nodes[node]
+        nd   = G.nodes[node]
         comm = metrics.get("communities", {}).get(node, 0)
         nodes_data.append({
-            "id": str(node),
-            "label": nd.get("label", str(node)),
-            "dept": nd.get("dept", ""),
-            "company": nd.get("company", ""),
-            "position": nd.get("position", ""),
-            "group": nd.get("group", ""),
-            "community": comm,
-            "pagerank": metrics.get("pagerank", {}).get(node, 0),
-            "in_strength": metrics.get("in_strength", {}).get(node, 0),
-            "out_strength": metrics.get("out_strength", {}).get(node, 0),
+            "id":          str(node),
+            "label":       nd.get("label", str(node)),
+            "dept":        nd.get("dept",    ""),
+            "circle":      nd.get("circle",  ""),
+            "company":     nd.get("company", ""),
+            "position":    nd.get("position",""),
+            "group":       nd.get("group",   ""),
+            "community":   comm,
+            "pagerank":    metrics.get("pagerank",     {}).get(node, 0),
+            "in_strength": metrics.get("in_strength",  {}).get(node, 0),
+            "out_strength":metrics.get("out_strength", {}).get(node, 0),
         })
 
-    edges_data = []
-    for u, v, data in G.edges(data=True):
-        edges_data.append({
-            "source": str(u), "target": str(v),
-            "weight": data.get("weight", 1),
-        })
+    edges_data = [
+        {"source": str(u), "target": str(v), "weight": data.get("weight", 1)}
+        for u, v, data in G.edges(data=True)
+    ]
 
     n_comm = max(1, len(set(metrics.get("communities", {}).values())))
     colors = ["#58a6ff","#f78166","#3fb950","#d2a8ff","#ffa657",
@@ -789,7 +802,7 @@ def create_social_graph_viz(G, metrics):
         .label {{ fill:#8b949e; font-size:10px; pointer-events:none; text-anchor:middle; }}
         #tooltip {{ position:absolute; background:#161b22; border:1px solid #30363d;
                     color:#c9d1d9; padding:10px 14px; border-radius:6px; font-size:12px;
-                    pointer-events:none; opacity:0; transition:opacity 0.2s; max-width:220px; line-height:1.6; }}
+                    pointer-events:none; opacity:0; transition:opacity 0.2s; max-width:240px; line-height:1.6; }}
     </style></head><body>
     <div class="controls">
         <button class="btn" onclick="resetZoom()">↺ Сброс</button>
@@ -818,8 +831,7 @@ def create_social_graph_viz(G, metrics):
             const pr = nodes.map(n => n.pagerank);
             const minPr = Math.min(...pr), maxPr = Math.max(...pr);
             const range = maxPr - minPr || 1;
-            const minR = 4, maxR = 16;
-            return minR + (maxR - minR) * (d.pagerank - minPr) / range;
+            return 4 + 12 * (d.pagerank - minPr) / range;
         }})
         .attr("fill", d => colors[d.community % colors.length])
         .attr("stroke","#0d1117").attr("stroke-width",1.5)
@@ -828,28 +840,29 @@ def create_social_graph_viz(G, metrics):
             const tip = document.getElementById("tooltip");
             tip.innerHTML = `<strong>${{d.label}}</strong><br>
                 ${{d.position}}<br>
-                <span style="color:#58a6ff">${{d.company}}</span> / ${{d.dept}}<br>
+                <span style="color:#58a6ff">${{d.circle || d.group}}</span><br>
+                Уровень: ${{d.dept || '—'}}<br>
                 <hr style="border-color:#30363d;margin:6px 0">
                 PageRank: ${{d.pagerank.toFixed(4)}}<br>
                 Входящих: ${{d.in_strength.toFixed(0)}} · Исходящих: ${{d.out_strength.toFixed(0)}}`;
             tip.style.opacity = 1;
             tip.style.left = (event.pageX+12)+"px";
-            tip.style.top = (event.pageY-10)+"px";
+            tip.style.top  = (event.pageY-10)+"px";
         }})
         .on("mouseout", () => {{ document.getElementById("tooltip").style.opacity = 0; }})
         .call(d3.drag()
             .on("start",(e,d)=>{{ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; }})
-            .on("drag",(e,d)=>{{ d.fx=e.x;d.fy=e.y; }})
-            .on("end",(e,d)=>{{ if(!e.active) sim.alphaTarget(0); d.fx=null;d.fy=null; }}));
+            .on("drag", (e,d)=>{{ d.fx=e.x;d.fy=e.y; }})
+            .on("end",  (e,d)=>{{ if(!e.active) sim.alphaTarget(0); d.fx=null;d.fy=null; }}));
 
     const labelEls = g.append("g").selectAll("text").data(nodes).join("text")
         .attr("class","label").attr("dy",-8)
-        .text(d => d.label.length>18 ? d.label.slice(0,18)+"…" : d.label);
+        .text(d => d.label.length > 18 ? d.label.slice(0,18)+"…" : d.label);
 
     const sim = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d=>d.id).distance(70))
-        .force("charge", d3.forceManyBody().strength(-180))
-        .force("center", d3.forceCenter(W/2, H/2))
+        .force("link",      d3.forceLink(links).id(d=>d.id).distance(70))
+        .force("charge",    d3.forceManyBody().strength(-180))
+        .force("center",    d3.forceCenter(W/2, H/2))
         .force("collision", d3.forceCollide().radius(14))
         .on("tick", () => {{
             linkEls.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
@@ -858,16 +871,16 @@ def create_social_graph_viz(G, metrics):
             labelEls.attr("x",d=>d.x).attr("y",d=>d.y);
         }});
 
-    function resetZoom(){{ svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity); }}
-    let labelsOn=true;
-    function toggleLabels(){{ labelsOn=!labelsOn; labelEls.style("opacity", labelsOn?1:0); }}
-    let physOn=true;
-    function togglePhysics(){{ physOn=!physOn; physOn ? sim.alpha(0.3).restart() : sim.stop(); }}
+    function resetZoom()  {{ svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity); }}
+    let labelsOn = true;
+    function toggleLabels()  {{ labelsOn=!labelsOn; labelEls.style("opacity", labelsOn?1:0); }}
+    let physOn = true;
+    function togglePhysics() {{ physOn=!physOn; physOn ? sim.alpha(0.3).restart() : sim.stop(); }}
     </script></body></html>"""
     return html
 
 
-# ========================= ФУНКЦИОНАЛЬНАЯ СЕТЬ (Иерархическая) =========================
+# ========================= ФУНКЦИОНАЛЬНАЯ СЕТЬ =========================
 
 def create_functional_network_viz(G_groups, G_people, group_members, metrics_groups, metrics_people):
     group_nodes = []
@@ -875,40 +888,41 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
         nd = G_groups.nodes[node]
         group_nodes.append({
             "id": f"g_{node}", "original_id": node,
-            "label": nd.get("label", str(node)),
-            "type": "group", "size": nd.get("size", 1),
-            "members": nd.get("members", []),
-            "in_strength": metrics_groups.get("in_strength",{}).get(node,0),
-            "out_strength": metrics_groups.get("out_strength",{}).get(node,0),
+            "label":       nd.get("label", str(node)),
+            "type":        "group",
+            "size":        nd.get("size", 1),
+            "members":     nd.get("members", []),
+            "in_strength": metrics_groups.get("in_strength",  {}).get(node, 0),
+            "out_strength":metrics_groups.get("out_strength", {}).get(node, 0),
         })
 
-    group_edges = []
-    for u, v, data in G_groups.edges(data=True):
-        group_edges.append({
-            "source": f"g_{u}", "target": f"g_{v}",
-            "weight": data.get("weight",1), "people": data.get("people",0),
-        })
+    group_edges = [
+        {"source": f"g_{u}", "target": f"g_{v}",
+         "weight": data.get("weight",1), "people": data.get("people",0)}
+        for u, v, data in G_groups.edges(data=True)
+    ]
 
     people_nodes = []
     for node in G_people.nodes():
         nd = G_people.nodes[node]
         people_nodes.append({
-            "id": f"p_{node}", "original_id": node,
-            "label": nd.get("label", str(node)),
-            "dept": nd.get("dept",""), "company": nd.get("company",""),
-            "position": nd.get("position",""), "group": nd.get("group",""),
-            "type": "person",
-            "in_strength": metrics_people.get("in_strength",{}).get(node,0),
-            "out_strength": metrics_people.get("out_strength",{}).get(node,0),
-            "pagerank": metrics_people.get("pagerank",{}).get(node,0),
+            "id":          f"p_{node}", "original_id": node,
+            "label":       nd.get("label",    str(node)),
+            "dept":        nd.get("dept",     ""),
+            "circle":      nd.get("circle",   ""),
+            "company":     nd.get("company",  ""),
+            "position":    nd.get("position", ""),
+            "group":       nd.get("group",    ""),
+            "type":        "person",
+            "in_strength": metrics_people.get("in_strength",  {}).get(node, 0),
+            "out_strength":metrics_people.get("out_strength", {}).get(node, 0),
+            "pagerank":    metrics_people.get("pagerank",     {}).get(node, 0),
         })
 
-    people_edges = []
-    for u, v, data in G_people.edges(data=True):
-        people_edges.append({
-            "source": f"p_{u}", "target": f"p_{v}",
-            "weight": data.get("weight",1),
-        })
+    people_edges = [
+        {"source": f"p_{u}", "target": f"p_{v}", "weight": data.get("weight",1)}
+        for u, v, data in G_people.edges(data=True)
+    ]
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -920,12 +934,12 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
                 border-radius:5px; cursor:pointer; font-size:12px; font-family:'IBM Plex Mono',monospace; }}
         .btn:hover {{ background:#21262d; }}
         #breadcrumb {{ position:absolute; top:14px; left:14px; color:#58a6ff;
-                        font-family:'IBM Plex Mono',monospace; font-size:13px; }}
+                       font-family:'IBM Plex Mono',monospace; font-size:13px; }}
         #tooltip {{ position:absolute; background:#161b22; border:1px solid #30363d;
                     color:#c9d1d9; padding:10px 14px; border-radius:6px; font-size:12px;
-                    pointer-events:none; opacity:0; transition:opacity 0.2s; max-width:230px; line-height:1.6; }}
+                    pointer-events:none; opacity:0; transition:opacity 0.2s; max-width:240px; line-height:1.6; }}
     </style></head><body>
-    <div id="breadcrumb">Уровень: Группы</div>
+    <div id="breadcrumb">Уровень: Круги</div>
     <div class="controls">
         <button class="btn" onclick="goHome()">↺ Домой</button>
         <button class="btn" onclick="resetZoom()">⊕ Сброс</button>
@@ -936,8 +950,8 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
     <svg id="viz"></svg>
     <script>
     const W = window.innerWidth, H = window.innerHeight;
-    const groupNodesData = {json.dumps(group_nodes)};
-    const groupEdgesData = {json.dumps(group_edges)};
+    const groupNodesData  = {json.dumps(group_nodes)};
+    const groupEdgesData  = {json.dumps(group_edges)};
     const peopleNodesData = {json.dumps(people_nodes)};
     const peopleEdgesData = {json.dumps(people_edges)};
 
@@ -947,7 +961,7 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
     let sim;
 
     const svg = d3.select("#viz").attr("width",W).attr("height",H);
-    const g = svg.append("g");
+    const g   = svg.append("g");
     const zoom = d3.zoom().scaleExtent([0.05,12]).on("zoom", e => g.attr("transform", e.transform));
     svg.call(zoom);
 
@@ -965,8 +979,8 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
             .attr("fill", d => d.type==="group" ? "#58a6ff" : "#3fb950")
             .attr("stroke","#0d1117").attr("stroke-width",2)
             .attr("cursor","pointer")
-            .on("click", (e,d) => {{ if(level==="groups" && d.type==="group") expandGroup(d); }})
-            .on("dblclick", (e,d) => {{ if(level==="people") goHome(); }})
+            .on("click",   (e,d) => {{ if(level==="groups" && d.type==="group") expandGroup(d); }})
+            .on("dblclick",(e,d) => {{ if(level==="people") goHome(); }})
             .on("mouseover", (event, d) => {{
                 const tip = document.getElementById("tooltip");
                 if(d.type==="group") {{
@@ -978,7 +992,8 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
                 }} else {{
                     tip.innerHTML = `<strong>${{d.label}}</strong><br>
                         ${{d.position}}<br>
-                        <span style="color:#58a6ff">${{d.company}}</span> / ${{d.dept}}<br>
+                        <span style="color:#58a6ff">${{d.circle || d.group}}</span><br>
+                        Уровень: ${{d.dept || '—'}}<br>
                         <hr style="border-color:#30363d;margin:6px 0">
                         Входящих: ${{d.in_strength.toFixed(0)}} · Исходящих: ${{d.out_strength.toFixed(0)}}<br>
                         <em style="color:#8b949e">Двойной клик — назад</em>`;
@@ -990,19 +1005,19 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
             .on("mouseout", () => {{ document.getElementById("tooltip").style.opacity=0; }})
             .call(d3.drag()
                 .on("start",(e,d)=>{{ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; }})
-                .on("drag",(e,d)=>{{ d.fx=e.x;d.fy=e.y; }})
-                .on("end",(e,d)=>{{ if(!e.active) sim.alphaTarget(0); d.fx=null;d.fy=null; }}));
+                .on("drag", (e,d)=>{{ d.fx=e.x;d.fy=e.y; }})
+                .on("end",  (e,d)=>{{ if(!e.active) sim.alphaTarget(0); d.fx=null;d.fy=null; }}));
 
         labelEls = g.append("g").selectAll("text").data(nodes).join("text")
             .attr("fill","#8b949e").attr("font-size","10px")
             .attr("text-anchor","middle").attr("dy",-10).attr("pointer-events","none")
-            .text(d => d.label && d.label.length>20 ? d.label.slice(0,20)+"…" : d.label);
+            .text(d => d.label && d.label.length>22 ? d.label.slice(0,22)+"…" : d.label);
 
         if(sim) sim.stop();
         sim = d3.forceSimulation(nodes)
-            .force("link", d3.forceLink(links).id(d=>d.id).distance(level==="groups"?160:80))
-            .force("charge", d3.forceManyBody().strength(-280))
-            .force("center", d3.forceCenter(W/2, H/2))
+            .force("link",      d3.forceLink(links).id(d=>d.id).distance(level==="groups"?180:80))
+            .force("charge",    d3.forceManyBody().strength(-280))
+            .force("center",    d3.forceCenter(W/2, H/2))
             .force("collision", d3.forceCollide().radius(d => d.type==="group" ? Math.sqrt(d.size)*4+15 : 12))
             .on("tick", () => {{
                 linkEls.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
@@ -1018,7 +1033,7 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
         nodes = peopleNodesData.filter(n => members.includes(n.original_id));
         const mids = new Set(nodes.map(n=>n.id));
         links = peopleEdgesData.filter(l => mids.has(l.source) && mids.has(l.target));
-        document.getElementById("breadcrumb").textContent = `Уровень: ${{gNode.label}} (двойной клик — назад)`;
+        document.getElementById("breadcrumb").textContent = `Круг: ${{gNode.label}} (двойной клик — назад)`;
         sim.stop(); initSim();
     }}
 
@@ -1026,15 +1041,15 @@ def create_functional_network_viz(G_groups, G_people, group_members, metrics_gro
         level = "groups";
         nodes = [...groupNodesData];
         links = [...groupEdgesData];
-        document.getElementById("breadcrumb").textContent = "Уровень: Группы";
+        document.getElementById("breadcrumb").textContent = "Уровень: Круги";
         sim.stop(); initSim();
     }}
 
-    function resetZoom(){{ svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity); }}
-    let labelsOn=true;
-    function toggleLabels(){{ labelsOn=!labelsOn; labelEls.style("opacity", labelsOn?1:0); }}
-    let physOn=true;
-    function togglePhysics(){{ physOn=!physOn; physOn ? sim.alpha(0.3).restart() : sim.stop(); }}
+    function resetZoom()  {{ svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity); }}
+    let labelsOn = true;
+    function toggleLabels()  {{ labelsOn=!labelsOn; labelEls.style("opacity", labelsOn?1:0); }}
+    let physOn = true;
+    function togglePhysics() {{ physOn=!physOn; physOn ? sim.alpha(0.3).restart() : sim.stop(); }}
 
     initSim();
     </script></body></html>"""
@@ -1050,22 +1065,22 @@ def render_advanced_stats(G_people, metrics):
     for node in G_people.nodes():
         nd = G_people.nodes[node]
         nodes_metrics.append({
-            "id": node,
-            "ФИО": nd.get("label",""),
-            "Компания": nd.get("company",""),
-            "Отдел": nd.get("dept",""),
-            "PageRank": round(metrics["pagerank"].get(node,0),5),
-            "Betweenness": round(metrics["betweenness"].get(node,0),5),
-            "Closeness": round(metrics["closeness"].get(node,0),4),
-            "Clustering": round(metrics["clustering"].get(node,0),4),
-            "Eigenvector": round(metrics["eigenvector"].get(node,0),4),
-            "Constraint": round(metrics["constraint"].get(node,0),4),
-            "K-core": metrics["core_number"].get(node,0),
-            "Bridge": metrics["is_bridge"].get(node,0),
-            "Load": round(metrics["load"].get(node,0),5),
-            "DeptDiv": round(metrics["dept_diversity"].get(node,0),3),
-            "In": round(metrics["in_strength"].get(node,0),1),
-            "Out": round(metrics["out_strength"].get(node,0),1),
+            "id":          node,
+            "ФИО":         nd.get("label",   ""),
+            "Круг":        nd.get("circle",  ""),
+            "Уровень":     nd.get("dept",    ""),
+            "PageRank":    round(metrics["pagerank"].get(node,   0), 5),
+            "Betweenness": round(metrics["betweenness"].get(node,0), 5),
+            "Closeness":   round(metrics["closeness"].get(node,  0), 4),
+            "Clustering":  round(metrics["clustering"].get(node, 0), 4),
+            "Eigenvector": round(metrics["eigenvector"].get(node,0), 4),
+            "Constraint":  round(metrics["constraint"].get(node, 0), 4),
+            "K-core":      metrics["core_number"].get(node, 0),
+            "Bridge":      metrics["is_bridge"].get(node,    0),
+            "Load":        round(metrics["load"].get(node,       0), 5),
+            "CircleDiv":   round(metrics["dept_diversity"].get(node, 0), 3),
+            "In":          round(metrics["in_strength"].get(node,  0), 1),
+            "Out":         round(metrics["out_strength"].get(node, 0), 1),
         })
     df_m = pd.DataFrame(nodes_metrics)
 
@@ -1073,23 +1088,23 @@ def render_advanced_stats(G_people, metrics):
     with col1:
         st.markdown("""<div class="metric-card">
         <strong>PageRank</strong> — влиятельность в сети<br>
-        <strong>Betweenness</strong> — посредничество между группами<br>
+        <strong>Betweenness</strong> — посредничество между кругами<br>
         <strong>Closeness</strong> — близость к центру сети<br>
         <strong>Clustering</strong> — плотность связей вокруг узла<br>
         <strong>Eigenvector</strong> — связан с влиятельными людьми<br>
         <strong>Constraint</strong> — ограниченность (↓ = больше структурных дыр)<br>
         <strong>K-core</strong> — принадлежность к ядру активности<br>
         <strong>Bridge</strong> — мост между сообществами<br>
-        <strong>DeptDiv</strong> — разнообразие отделов в связях
+        <strong>CircleDiv</strong> — разнообразие кругов в связях
         </div>""", unsafe_allow_html=True)
 
     with col2:
-        avg_cl = df_m["Clustering"].mean()
-        avg_cn = df_m["Constraint"].mean()
-        n_br = int(df_m["Bridge"].sum())
-        max_core = int(df_m["K-core"].max())
-        mod = metrics.get("modularity",0)
-        rec = metrics.get("reciprocity",0)
+        avg_cl  = df_m["Clustering"].mean()
+        avg_cn  = df_m["Constraint"].mean()
+        n_br    = int(df_m["Bridge"].sum())
+        max_core= int(df_m["K-core"].max())
+        mod     = metrics.get("modularity",   0)
+        rec     = metrics.get("reciprocity",  0)
 
         st.markdown(f"""<div class="metric-card">
         <strong>Средняя кластеризация:</strong> {avg_cl:.3f}
@@ -1103,45 +1118,55 @@ def render_advanced_stats(G_people, metrics):
         </div>""", unsafe_allow_html=True)
 
     st.markdown("#### 🏆 Топ по метрикам")
-    tabs = st.tabs(["Opinion Leaders", "Brokers", "Gatekeepers", "Influencers", "Diverse Networks", "Core Members"])
+    tabs = st.tabs(["Opinion Leaders","Brokers","Gatekeepers","Influencers","Circle Diversity","Core Members"])
     with tabs[0]:
-        st.dataframe(df_m.nlargest(15,"PageRank")[["ФИО","Компания","Отдел","PageRank","In","Out"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nlargest(15,"PageRank")[["ФИО","Круг","Уровень","PageRank","In","Out"]], use_container_width=True, hide_index=True)
     with tabs[1]:
-        st.dataframe(df_m.nlargest(15,"Betweenness")[["ФИО","Компания","Отдел","Betweenness","Bridge"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nlargest(15,"Betweenness")[["ФИО","Круг","Уровень","Betweenness","Bridge"]], use_container_width=True, hide_index=True)
     with tabs[2]:
-        st.dataframe(df_m.nsmallest(15,"Constraint")[["ФИО","Компания","Отдел","Constraint","Betweenness"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nsmallest(15,"Constraint")[["ФИО","Круг","Уровень","Constraint","Betweenness"]], use_container_width=True, hide_index=True)
     with tabs[3]:
-        st.dataframe(df_m.nlargest(15,"Eigenvector")[["ФИО","Компания","Отдел","Eigenvector","PageRank"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nlargest(15,"Eigenvector")[["ФИО","Круг","Уровень","Eigenvector","PageRank"]], use_container_width=True, hide_index=True)
     with tabs[4]:
-        st.dataframe(df_m.nlargest(15,"DeptDiv")[["ФИО","Компания","Отдел","DeptDiv","Out"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nlargest(15,"CircleDiv")[["ФИО","Круг","Уровень","CircleDiv","Out"]], use_container_width=True, hide_index=True)
     with tabs[5]:
-        st.dataframe(df_m.nlargest(15,"K-core")[["ФИО","Компания","Отдел","K-core","PageRank"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_m.nlargest(15,"K-core")[["ФИО","Круг","Уровень","K-core","PageRank"]], use_container_width=True, hide_index=True)
 
     st.markdown("#### 📋 Полная таблица метрик")
-    st.dataframe(df_m.drop(columns=["id"], errors="ignore").sort_values("PageRank", ascending=False),
-                 use_container_width=True, hide_index=True, height=400)
+    st.dataframe(
+        df_m.drop(columns=["id"], errors="ignore").sort_values("PageRank", ascending=False),
+        use_container_width=True, hide_index=True, height=400
+    )
 
-    # Экспорт
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
         csv = df_m.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("📥 Скачать метрики (CSV)", csv, "metrics.csv", "text/csv")
+        st.download_button("📥 Скачать метрики (CSV)", csv, "metrics_radkop.csv", "text/csv")
     with col2:
         graph_data = {
-            "nodes": [{"id":str(n),"label":G_people.nodes[n].get("label",""),
-                       "dept":G_people.nodes[n].get("dept",""),
-                       "company":G_people.nodes[n].get("company",""),
-                       "pagerank":float(metrics["pagerank"].get(n,0)),
-                       "community":int(metrics["communities"].get(n,0))} for n in G_people.nodes()],
-            "edges": [{"source":str(u),"target":str(v),"weight":float(d.get("weight",1))}
-                      for u,v,d in G_people.edges(data=True)],
-            "stats": {"modularity": float(metrics.get("modularity",0)),
-                      "reciprocity": float(metrics.get("reciprocity",0))}
+            "nodes": [
+                {"id": str(n), "label": G_people.nodes[n].get("label",""),
+                 "circle":  G_people.nodes[n].get("circle",""),
+                 "dept":    G_people.nodes[n].get("dept",""),
+                 "pagerank":    float(metrics["pagerank"].get(n, 0)),
+                 "community":   int(metrics["communities"].get(n, 0))}
+                for n in G_people.nodes()
+            ],
+            "edges": [
+                {"source": str(u), "target": str(v), "weight": float(d.get("weight",1))}
+                for u, v, d in G_people.edges(data=True)
+            ],
+            "stats": {
+                "modularity":  float(metrics.get("modularity",  0)),
+                "reciprocity": float(metrics.get("reciprocity", 0)),
+            }
         }
-        st.download_button("📥 Скачать граф (JSON)",
-                           json.dumps(graph_data, indent=2, ensure_ascii=False),
-                           "graph.json", "application/json")
+        st.download_button(
+            "📥 Скачать граф (JSON)",
+            json.dumps(graph_data, indent=2, ensure_ascii=False),
+            "graph_radkop.json", "application/json"
+        )
 
 
 # ========================= MAIN =========================
@@ -1153,7 +1178,7 @@ def main():
             🕸️ СоциоГраф 6.0
         </span>
         <span style="color:#8b949e;font-size:0.85rem;margin-left:12px;">
-            Аналитика программы 3Д Коммуникации · ГК Термекс
+            Аналитика программы 3Д Коммуникации · РАД КОП
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -1174,31 +1199,30 @@ def main():
         tx_raw = load_transactions(tx_path)
         tx_df  = merge_data(tx_raw, emp_df)
 
-
-    # --- Фильтры ---
-    cfg = sidebar_controls(tx_df, emp_df)
-
-
+    cfg      = sidebar_controls(tx_df, emp_df)
     filtered = apply_filters(tx_df, emp_df, cfg)
-
 
     if len(filtered) == 0:
         st.warning("⚠️ Нет данных для выбранных фильтров")
         st.stop()
 
-    # --- Шапка: 5 метрик ---
-    n_companies = filtered[f"sender_{EMP_COLS['company']}"].nunique()
-    n_depts     = filtered[f"sender_{EMP_COLS['dept']}"].nunique()
-    n_emps      = pd.Index(filtered[TX_COLS["sender_id"]]).append(pd.Index(filtered[TX_COLS["receiver_id"]])).nunique()
+    # Шапка: сводные метрики
+    n_circles = filtered[f"sender_{EMP_COLS['circle']}"].nunique()
+    n_depts   = filtered[f"sender_{EMP_COLS['dept']}"].nunique()
+    n_emps    = (
+        pd.Index(filtered[TX_COLS["sender_id"]])
+        .append(pd.Index(filtered[TX_COLS["receiver_id"]]))
+        .nunique()
+    )
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Транзакций",  f"{len(filtered):,}")
     c2.metric("Меритов",     f"{filtered[TX_COLS['merits']].sum():,}")
-    c3.metric("Компаний",    f"{n_companies}")
-    c4.metric("Отделов",     f"{n_depts}")
-    c5.metric("Сотрудников", f"{n_emps:,}")
+    c3.metric("Кругов",      f"{n_circles}")
+    c4.metric("Уровней",     f"{n_depts}")
+    c5.metric("Участников",  f"{n_emps:,}")
 
-    # --- Строим граф ---
+    # Граф
     with st.spinner("Строим граф..."):
         G_people, G_groups, group_members = build_graph(
             filtered, emp_df, cfg["graph_group"], cfg["merit_range"]
@@ -1209,44 +1233,39 @@ def main():
         metrics_people = calculate_graph_metrics(G_people)
         metrics_groups = calculate_graph_metrics(G_groups)
 
+    group_label = "кругов" if cfg["graph_group"] == "По кругам" else "уровней"
     st.markdown(f"""<div class="metric-card" style="margin:0.5rem 0">
-    <strong>Граф:</strong> {G_groups.number_of_nodes()} групп · {G_people.number_of_nodes()} сотрудников · {G_people.number_of_edges()} связей &nbsp;|&nbsp;
+    <strong>Граф:</strong> {G_groups.number_of_nodes()} {group_label} · {G_people.number_of_nodes()} участников · {G_people.number_of_edges()} связей &nbsp;|&nbsp;
     <strong>Модулярность:</strong> {metrics_people.get('modularity',0):.3f} &nbsp;|&nbsp;
     <strong>Взаимность:</strong> {metrics_people.get('reciprocity',0):.3f}
     </div>""", unsafe_allow_html=True)
 
-    # --- Визуализации ---
     st.markdown('<div class="section-header">Визуализация сети</div>', unsafe_allow_html=True)
-
     tab_social, tab_func = st.tabs(["🌀 Социальный граф", "🌐 Функциональная сеть"])
 
     with tab_social:
         st.markdown("""<div class="info-box">
-        <strong>Социальный граф</strong> — все сотрудники одновременно.<br>
-        Цвет узла = сообщество (алгоритм Louvain) · Размер = PageRank · Толщина связи = мериты<br>
+        <strong>Социальный граф</strong> — все участники одновременно.<br>
+        Цвет узла = сообщество (Louvain) · Размер = PageRank · Толщина связи = мериты<br>
         Наведите на узел для подробностей · Перетаскивайте · Скролл — зум
         </div>""", unsafe_allow_html=True)
         components.html(create_social_graph_viz(G_people, metrics_people), height=720, scrolling=False)
 
     with tab_func:
-        st.markdown("""<div class="info-box">
+        mode_hint = "Клик на круг" if cfg["graph_group"] == "По кругам" else "Клик на уровень"
+        st.markdown(f"""<div class="info-box">
         <strong>Функциональная сеть</strong> — иерархия: группы → люди.<br>
-        <strong>Клик на группу</strong> — раскрыть сотрудников · <strong>Двойной клик</strong> — вернуться назад<br>
-        Размер группы = число участников · Наведите на узел для подробностей
+        <strong>{mode_hint}</strong> — раскрыть участников · <strong>Двойной клик</strong> — вернуться назад<br>
+        Размер узла = число участников · Наведите для подробностей
         </div>""", unsafe_allow_html=True)
         components.html(
             create_functional_network_viz(G_groups, G_people, group_members, metrics_groups, metrics_people),
             height=720, scrolling=False
         )
 
-    # --- KPI ---
     kpis = compute_kpis(tx_raw, emp_df, filtered)
     render_kpis(kpis)
-
-    # --- Топы ---
     render_tops(filtered, emp_df)
-
-    # --- Продвинутая статистика ---
     render_advanced_stats(G_people, metrics_people)
 
 
