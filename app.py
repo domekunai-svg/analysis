@@ -1,22 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-СоциоГраф 7.0 — Аналитика программы «3Д Коммуникации»
-Переработка под принципы Интерпретационной рамки и ТЗ блоков.
-
-Что нового против 6.0:
-  • Составной ключ отдела (Компания + Отдел) — больше не склеивает одноимённые отделы
-  • Двусторонний фильтр (отправитель ИЛИ получатель)
-  • Знаменатели KPI берутся из данных, а не из зашитой константы
-  • Темпоральный блок (пульс, сезонность, концентрация конца месяца, GVI)
-  • Ценностный блок (VER через квартили, разнообразие, динамика)
-  • Care-сигналы затухания (LEAVE) + валидация на уволенных
-  • Рейтинги людей заменены на распределения и описательные позиции (Принцип 9 рамки)
-  • Уровни подачи: Организация → Подразделение → Сотрудник → Аналитик
-  • 🔧 ВРЕМЕННЫЙ блок диагностики (трейсбеки ошибок) — внизу страницы
-
-Графовые визуализации D3 вынесены в graph_viz.py.
-Зависимости: streamlit, pandas, numpy, networkx, plotly, python-louvain, scipy, openpyxl
-"""
+"""СоциоГраф — аналитика программы «3Д Коммуникации». Графика D3 в graph_viz.py,
+панели в panels.py, грейды в grades.py.
+Зависимости: streamlit, pandas, numpy, networkx, plotly, python-louvain, scipy, openpyxl"""
 
 import os
 import time
@@ -30,9 +15,7 @@ import numpy as np
 import pandas as pd
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ВРЕМЕННЫЙ СБОРЩИК ДИАГНОСТИКИ  (удалить весь блок перед продакшеном)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── ДИАГНОСТИКА (временный блок) ─────────────────────────
 class Debug:
     stages, errors, warns, info = [], [], [], {}
 
@@ -59,13 +42,13 @@ class Debug:
 
     @classmethod
     def report_text(cls):
-        L = ["=== ДИАГНОСТИКА СоциоГраф 7.0 ===", f"время: {datetime.now():%Y-%m-%d %H:%M:%S}", "", "[ОКРУЖЕНИЕ]"]
+        L = ["=== ДИАГНОСТИКА СоциоГраф ===", f"время: {datetime.now():%Y-%m-%d %H:%M:%S}", "", "[ОКРУЖЕНИЕ]"]
         L += [f"  {k}: {v}" for k, v in cls.info.items()]
         L += ["", "[ЭТАПЫ]"]
         L += [f"  [{s:7}] {sec:>5}s  {n}" + (f"  — {m}" if m else "") for n, s, sec, m in cls.stages]
         if cls.warns:
             L += ["", "[ПРЕДУПРЕЖДЕНИЯ]"] + ["  " + w for w in cls.warns]
-        L += ["", "[ТРЕЙСБЕКИ ОШИБОК]" + ("" if cls.errors else " нет")]
+        L += ["", "[ТРЕЙСБЕКИ]" + ("" if cls.errors else " нет")]
         for where, tb in cls.errors:
             L += [f"  --- {where} ---", tb]
         return "\n".join(L)
@@ -75,7 +58,6 @@ def _showwarning(message, category, filename, lineno, file=None, line=None):
     Debug.note_warning(f"{category.__name__}: {message} ({os.path.basename(str(filename))}:{lineno})")
 warnings.showwarning = _showwarning
 
-# Опциональные импорты под защитой — их падение попадает в диагностику
 _IMPORT_ERR = {}
 import streamlit as st
 try:
@@ -84,8 +66,9 @@ except Exception:
     nx = None; _IMPORT_ERR["networkx"] = traceback.format_exc()
 try:
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 except Exception:
-    go = None; _IMPORT_ERR["plotly"] = traceback.format_exc()
+    go = None; make_subplots = None; _IMPORT_ERR["plotly"] = traceback.format_exc()
 try:
     from community import community_louvain
 except Exception:
@@ -95,20 +78,27 @@ try:
 except Exception:
     components = None; _IMPORT_ERR["components"] = traceback.format_exc()
 try:
-    from graph_viz import social_graph_html, functional_html
+    from graph_viz import social_graph_html, hierarchy_html
 except Exception:
-    social_graph_html = functional_html = None; _IMPORT_ERR["graph_viz"] = traceback.format_exc()
+    social_graph_html = hierarchy_html = None; _IMPORT_ERR["graph_viz"] = traceback.format_exc()
+try:
+    import panels
+except Exception:
+    panels = None; _IMPORT_ERR["panels"] = traceback.format_exc()
+try:
+    from grades import grade_dynamics_figure
+except Exception:
+    grade_dynamics_figure = None; _IMPORT_ERR["grades"] = traceback.format_exc()
 
 Debug.info = {"python": platform.python_version(), "pandas": pd.__version__, "numpy": np.__version__,
               "networkx": getattr(nx, "__version__", "—"), "streamlit": getattr(st, "__version__", "—"),
               "plotly": "ok" if go else "—", "louvain": "ok" if community_louvain else "—",
-              "graph_viz": "ok" if social_graph_html else "—"}
+              "graph_viz": "ok" if social_graph_html else "—", "panels": "ok" if panels else "—",
+              "grades": "ok" if grade_dynamics_figure else "—"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  СТИЛЬ
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="СоциоГраф 7.0", page_icon="🕸️", layout="wide", initial_sidebar_state="expanded")
+# ───────────────────────── СТИЛЬ ─────────────────────────
+st.set_page_config(page_title="3Д Коммуникации", page_icon="🕸️", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -117,7 +107,7 @@ st.markdown("""
  h1,h2,h3{font-family:'IBM Plex Mono',monospace !important;color:#58a6ff !important;font-weight:600 !important;letter-spacing:-0.5px;}
  [data-testid="stMetricValue"]{font-family:'IBM Plex Mono',monospace;font-size:1.7rem !important;color:#58a6ff !important;}
  [data-testid="stMetricLabel"]{font-size:0.72rem !important;color:#8b949e !important;text-transform:uppercase;letter-spacing:1px;}
- .kpi-box{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem 1.1rem;position:relative;min-height:96px;}
+ .kpi-box{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem 1.1rem;min-height:96px;}
  .kpi-box .kpi-value{font-family:'IBM Plex Mono',monospace;font-size:1.5rem;font-weight:600;color:#58a6ff;line-height:1.1;}
  .kpi-box .kpi-label{font-size:0.68rem;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
  .kpi-box .kpi-sub{font-size:0.72rem;color:#6e7681;margin-top:6px;}
@@ -134,19 +124,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  СХЕМА
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── СХЕМА ─────────────────────────
 MERITS_PER_MONTH = 10
-EMP = {"last":"Фамилия","first":"Имя","mid":"Отчество","gender":"Пол","id":"Персональный номер",
+EMP = {"last":"Фамилия","first":"Имя","mid":"Отчество","id":"Персональный номер",
        "pos":"Должность","company":"Компания","dept":"Отдел","fire":"Дата увольнения"}
 TX  = {"date":"Дата","time":"Время","sid":"Номер отправителя","rid":"Номер получателя",
        "value":"Ценность","merits":"Мериты","comment":"Комментарий"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ЗАГРУЗКА
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── ЗАГРУЗКА ─────────────────────────
 @st.cache_data(show_spinner=False)
 def load_employees(path):
     df = pd.read_excel(path, engine="openpyxl")
@@ -178,7 +164,7 @@ def load_transactions(path):
     n0 = len(df)
     df = df[(df[TX["sid"]] != "-1") & (df[TX["rid"]] != "-1")]
     if n0 - len(df):
-        Debug.note_warning(f"load_transactions: отброшено {n0-len(df)} актов с нераспознанным id")
+        Debug.note_warning(f"отброшено {n0-len(df)} актов с нераспознанным id")
     if TX["value"] in df.columns:
         df[TX["value"]] = df[TX["value"]].astype(str).str.strip()
     df["day"] = df["dt"].dt.day
@@ -189,8 +175,7 @@ def load_transactions(path):
 
 
 def merge_data(tx, emp):
-    m = emp.set_index(EMP["id"])
-    m = m[~m.index.duplicated(keep="first")]
+    m = emp.set_index(EMP["id"]); m = m[~m.index.duplicated(keep="first")]
     cols = ["full_name", EMP["pos"], EMP["company"], EMP["dept"], "dept_key"]
     for pref, idc in (("s", TX["sid"]), ("r", TX["rid"])):
         for c in cols:
@@ -200,9 +185,7 @@ def merge_data(tx, emp):
     return tx
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ФИЛЬТРЫ (двусторонние)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── ФИЛЬТРЫ ─────────────────────────
 def sidebar_controls(tx, emp):
     st.sidebar.markdown("## ⚙️ Фильтры")
     st.sidebar.markdown('<div class="sidebar-section">Период</div>', unsafe_allow_html=True)
@@ -223,17 +206,14 @@ def sidebar_controls(tx, emp):
     sel_emps = st.sidebar.multiselect("Сотрудники", emps, default=[])
     st.sidebar.markdown('<div class="sidebar-section">Сторона признания</div>', unsafe_allow_html=True)
     side = st.sidebar.radio("Учитывать акты, где выбранные лица —",
-                            ["обе стороны", "только отправитель", "только получатель"], index=0,
-                            help="Двусторонний фильтр сохраняет и входящую сторону признания")
+                            ["обе стороны", "только отправитель", "только получатель"], index=0)
     st.sidebar.markdown('<div class="sidebar-section">Граф</div>', unsafe_allow_html=True)
-    group = st.sidebar.radio("Группировка графа", ["По компаниям", "По отделам"], index=0,
-                             help="Отделы Термекса малы (медиана ~3 чел) — по умолчанию по компаниям")
+    group = st.sidebar.radio("Группировка социального графа", ["По компаниям", "По отделам"], index=0)
     try:
         real_max = max(int(tx.groupby([TX["sid"], TX["rid"]])[TX["merits"]].sum().max()), 10)
     except Exception:
         real_max = 500
-    mr = st.sidebar.slider("Диапазон меритов на связь", 1, real_max, (1, real_max), 1,
-                           help=f"Суммарные мериты между парой. Макс. в данных: {real_max}")
+    mr = st.sidebar.slider("Диапазон меритов на связь", 1, real_max, (1, real_max), 1)
     return dict(years=set(sel_years), months=set(sel_months), values=set(sel_vals),
                 companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps),
                 side=side, group=group, merit_range=mr)
@@ -260,25 +240,19 @@ def apply_filters(tx, cfg):
     return df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  KPI — воронка вовлечённости
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── KPI ─────────────────────────
 def compute_funnel(emp, fd):
     active = emp[emp[EMP["fire"]].isna()]
-    n_active = len(active)
-    active_ids = set(active[EMP["id"]])
+    n_active = len(active); active_ids = set(active[EMP["id"]])
     fd = fd[fd[TX["sid"]].isin(active_ids) & fd[TX["rid"]].isin(active_ids)]
     senders = fd.groupby(TX["sid"]).size()
-    n_senders = int((senders >= 1).sum())
-    n_regular = int((senders > 1).sum())
+    n_senders = int((senders >= 1).sum()); n_regular = int((senders > 1).sum())
     receivers = set(fd[TX["rid"]].unique())
     involved = set(fd[TX["sid"]].unique()) | receivers
-    n_involved = len(involved)
-    total = int(fd[TX["merits"]].sum())
+    n_involved = len(involved); total = int(fd[TX["merits"]].sum())
     months = fd[["year", "month"]].drop_duplicates().shape[0] or 1
     emitted = n_involved * MERITS_PER_MONTH * months
-    return dict(n_active=n_active, n_involved=n_involved, n_senders=n_senders, n_regular=n_regular,
-                n_receivers=len(receivers), total=total,
+    return dict(n_involved=n_involved, n_senders=n_senders, n_regular=n_regular, n_receivers=len(receivers),
                 involve_share=round(n_involved / n_active * 100, 1) if n_active else 0,
                 send_share=round(n_senders / n_involved * 100, 1) if n_involved else 0,
                 budget_use=round(total / emitted * 100, 1) if emitted else 0,
@@ -293,108 +267,104 @@ def render_funnel(f):
         ("Регулярно участвуют", f"{f['n_regular']:,}", "отправили больше одной благодарности"),
         ("Получают признание", f"{f['n_receivers']:,}", "хотя бы одна благодарность за период"),
         ("Используется бюджет признания", f"{f['budget_use']}%", "доля переданных меритов от доступных за период"),
-        ("Среднее признание на человека", f"{f['avg_recv']}", "мериты на получателя — не оценка, см. распределение"),
+        ("Среднее признание на человека", f"{f['avg_recv']}", "мериты на получателя — см. распределение"),
     ]
     for c, (lab, val, sub) in zip(st.columns(6), cards):
         c.markdown(f'<div class="kpi-box"><div class="kpi-value">{val}</div>'
                    f'<div class="kpi-label">{lab}</div><div class="kpi-sub">{sub}</div></div>', unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ТЕМПОРАЛЬНЫЙ БЛОК
-# ─────────────────────────────────────────────────────────────────────────────
-def render_temporal(fd):
+# ───────────────────────── ПУЛЬС ─────────────────────────
+def render_temporal(fd, emp):
     st.markdown('<div class="section-header">Пульс программы во времени</div>', unsafe_allow_html=True)
     if go is None:
-        st.warning("plotly недоступен — графики пульса отключены (см. диагностику)."); return
+        st.warning("plotly недоступен (см. диагностику)."); return
     fdt = fd.dropna(subset=["dt"])
+    if len(fdt) == 0:
+        st.info("Нет данных с датами."); return
+
+    if panels is not None:
+        dfig = panels.daily_pulse_fig(fd, emp)
+        if dfig is not None:
+            st.plotly_chart(dfig, use_container_width=True)
+
     monthly = fdt.groupby("ym").agg(Актов=(TX["merits"], "size")).reset_index()
-    if len(monthly) < 2:
-        st.info("Недостаточно месяцев для динамики."); return
-    last_period = fdt["dt"].max().to_period("M")
-    in_last = fdt["dt"].dt.to_period("M") == last_period
-    days_seen = fdt.loc[in_last, "dt"].dt.day.max() if in_last.any() else 31
-    trimmed = days_seen < 25
-    plot = monthly.iloc[:-1] if trimmed and len(monthly) > 2 else monthly
-    fig = go.Figure(go.Scatter(x=plot["ym"], y=plot["Актов"], mode="lines+markers", line=dict(color="#58a6ff", width=2)))
-    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r=10, t=30, b=10),
-                      paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
-                      title="Помесячный объём признания" + (" (последний неполный месяц скрыт)" if trimmed else ""))
-    st.plotly_chart(fig, use_container_width=True)
+    if len(monthly) >= 2:
+        last_p = fdt["dt"].max().to_period("M")
+        in_last = fdt["dt"].dt.to_period("M") == last_p
+        trimmed = (fdt.loc[in_last, "dt"].dt.day.max() if in_last.any() else 31) < 25
+        plot = monthly.iloc[:-1] if trimmed and len(monthly) > 2 else monthly
+        fig = go.Figure(go.Scatter(x=plot["ym"], y=plot["Актов"], mode="lines+markers", line=dict(color="#58a6ff", width=2)))
+        fig.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=36, b=10),
+                          paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                          title="Помесячный объём" + (" (последний неполный месяц скрыт)" if trimmed else ""))
+        st.plotly_chart(fig, use_container_width=True)
 
     c1, c2 = st.columns(2)
     names = {1:"Янв",2:"Фев",3:"Мар",4:"Апр",5:"Май",6:"Июн",7:"Июл",8:"Авг",9:"Сен",10:"Окт",11:"Ноя",12:"Дек"}
     with c1:
-        seas = fdt.groupby("month")[TX["merits"]].size()
-        figs = go.Figure(go.Bar(x=[names[m] for m in seas.index], y=seas.values, marker_color="#79c0ff"))
-        figs.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=30, b=10),
-                           paper_bgcolor="#0d1117", plot_bgcolor="#0d1117", title="Сезонность (сумма по месяцам)")
+        _yr = fdt["dt"].dt.year.rename("y"); _mo = fdt["dt"].dt.month.rename("mo")
+        by_ym = fdt.groupby([_yr, _mo]).size().rename("acts").reset_index()
+        typical = by_ym.groupby("mo")["acts"].mean()
+        yrs = by_ym["y"].nunique()
+        figs = go.Figure(go.Bar(x=[names[m] for m in typical.index], y=typical.round(0).values, marker_color="#79c0ff"))
+        figs.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=40, b=10),
+                           paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                           title=f"Типичный месяц — среднее число актов (по {yrs} годам)")
         st.plotly_chart(figs, use_container_width=True)
     with c2:
-        late = (fd["day"] >= 25).mean()
-        expected = (31 - 25 + 1) / 30.4
+        late = (fd["day"] >= 25).mean(); expected = (31 - 25 + 1) / 30.4
         ratio = late / expected if expected else 0
         klass, txt = ("good", "распределено ровно") if ratio < 1.3 else ("care", "признание стягивается к концу месяца")
         st.markdown(f'<div class="card {klass}"><strong>Ритм внутри месяца.</strong><br>'
                     f'{late*100:.0f}% актов приходится на дни 25–31 (ожидаемо ~{expected*100:.0f}%). Это {txt}.<br>'
-                    f'<span class="muted">Высокая концентрация в конце месяца — возможный признак «дозакрытия лимита» '
-                    f'по привычке, а не по импульсу; стоит сопоставить с первыми месяцами программы. '
-                    f'Не означает, что признание неискренне.</span></div>', unsafe_allow_html=True)
-        q = fdt.groupby(fdt["dt"].dt.to_period("Q"))[TX["merits"]].size()
-        if len(q) >= 2 and q.iloc[-2]:
-            gvi = q.iloc[-1] / q.iloc[-2]
-            zone = "в зоне стабильности" if 0.67 <= gvi <= 1.5 else ("выше зоны (всплеск)" if gvi > 1.5 else "ниже зоны (спад)")
-            st.markdown(f'<div class="card"><strong>Динамика объёма (квартал к кварталу).</strong><br>'
-                        f'Отношение последнего квартала к предыдущему: {gvi:.2f} — {zone}.<br>'
-                        f'<span class="muted">Зона стабильности 0.67–1.5; на коротком окне чувствительно к сезону.</span></div>',
-                        unsafe_allow_html=True)
+                    f'<span class="muted">Сильная концентрация в конце месяца — возможный признак «дозакрытия лимита» '
+                    f'по привычке. Стоит сопоставить с первыми месяцами программы.</span></div>', unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ЦЕННОСТНЫЙ БЛОК
-# ─────────────────────────────────────────────────────────────────────────────
-def render_values(fd):
+# ───────────────────────── ЦЕННОСТИ ─────────────────────────
+def render_values(fd, emp):
     st.markdown('<div class="section-header">Карта ценностей</div>', unsafe_allow_html=True)
     vc = fd.groupby(TX["value"]).agg(Меритов=(TX["merits"], "sum")).reset_index()
     if len(vc) == 0:
         st.info("Нет ценностей в выборке."); return
     vc["Доля, %"] = (vc["Меритов"] / vc["Меритов"].sum() * 100).round(1)
     vc = vc.sort_values("Доля, %", ascending=False).reset_index(drop=True)
-    K = len(vc)
-    p = vc["Меритов"] / vc["Меритов"].sum()
-    VE = float(-(p * np.log2(p)).sum() / np.log2(K)) if K > 1 else 0.0
-    q1, q3 = vc["Доля, %"].quantile([0.25, 0.75])
+    K = len(vc); top3 = vc.head(3)["Доля, %"].sum()
     c1, c2 = st.columns([3, 2])
     with c1:
         if go is not None:
             fig = go.Figure(go.Bar(x=vc["Доля, %"], y=vc[TX["value"]], orientation="h", marker_color="#3fb950"))
-            fig.update_layout(template="plotly_dark", height=360, margin=dict(l=10, r=10, t=30, b=10),
+            fig.update_layout(template="plotly_dark", height=380, margin=dict(l=10, r=10, t=30, b=10),
                               paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
                               title="Доля меритов по ценностям", yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.dataframe(vc, use_container_width=True, hide_index=True)
     with c2:
-        strong = vc[vc["Доля, %"] >= q3][TX["value"]].tolist()
-        weak = vc[vc["Доля, %"] <= q1][TX["value"]].tolist()
-        lvl = "широкая" if VE > 0.85 else "умеренная" if VE > 0.6 else "узкая"
-        st.markdown(f'<div class="card"><strong>Разнообразие палитры:</strong> {VE:.2f} из 1.0 ({lvl}).<br>'
-                    f'<span class="muted">Насколько равномерно распределено признание по {K} ценностям.</span></div>',
+        st.markdown(f'<div class="card"><strong>Признание держится на {K} ценностях;</strong> '
+                    f'на три ведущие приходится {top3:.0f}% всех меритов '
+                    f'({", ".join(vc.head(3)[TX["value"]])}).<br>'
+                    f'<span class="muted">Чем выше доля немногих ценностей, тем у́же язык признания в компании.</span></div>',
                     unsafe_allow_html=True)
-        st.markdown(f'<div class="card"><strong>Ведущие ценности</strong> (верхняя четверть): {", ".join(strong)}.</div>',
-                    unsafe_allow_html=True)
-        st.markdown(f'<div class="card care"><strong>Редко звучащие</strong> (нижняя четверть): {", ".join(weak)}.<br>'
-                    f'<span class="muted">Прежде чем читать это как «нет такой ценности», проверьте линейку: '
-                    f'возможно, под этот регистр в списке просто нет подходящего слова (молчание линейки, '
-                    f'а не молчание людей).</span></div>', unsafe_allow_html=True)
-    st.markdown('<div class="info-box">Градовый профиль (порядки обоснования по Болтански–Тевено) строится '
-                'после разметки 14 ценностей лингвистом — на этих данных это ~день работы. Сейчас числовой слой.</div>',
-                unsafe_allow_html=True)
+        if panels is not None:
+            panels.render_value_people(fd, emp)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CARE-СИГНАЛЫ ЗАТУХАНИЯ (LEAVE)
-# ─────────────────────────────────────────────────────────────────────────────
+def render_grade_dynamics(tx, emp):
+    st.markdown('<div class="section-header">Темпоральная динамика градовой структуры</div>', unsafe_allow_html=True)
+    if go is None or grade_dynamics_figure is None:
+        st.info("Модуль грейдов недоступен (см. диагностику)."); return
+    comps = sorted(emp[EMP["company"]].dropna().unique().tolist())
+    if not comps:
+        return
+    default = "Тепловое Оборудование" if "Тепловое Оборудование" in comps else comps[0]
+    unit = st.selectbox("Подразделение", comps, index=comps.index(default))
+    fig = grade_dynamics_figure(go, make_subplots, tx, EMP["company"], unit)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ───────────────────────── LEAVE ─────────────────────────
 def compute_leave(tx_all, emp):
     active_ids = set(emp[emp[EMP["fire"]].isna()][EMP["id"]])
     maxd = tx_all["dt"].max()
@@ -410,8 +380,7 @@ def compute_leave(tx_all, emp):
 
 
 def validate_leave_on_fired(tx_all, emp):
-    fired = emp[emp[EMP["fire"]].notna()]
-    silent, total = 0, 0
+    fired = emp[emp[EMP["fire"]].notna()]; silent, total = 0, 0
     for _, row in fired.iterrows():
         pid, fdate = row[EMP["id"]], row[EMP["fire"]]
         sub = tx_all[(tx_all[TX["sid"]] == pid) & (tx_all["dt"] < fdate)]
@@ -428,37 +397,31 @@ def validate_leave_on_fired(tx_all, emp):
 
 def render_leave(tx_all, emp, closed_view):
     st.markdown('<div class="section-header">Ранние сигналы затухания (care)</div>', unsafe_allow_html=True)
-    lv = compute_leave(tx_all, emp)
-    sil, tot = validate_leave_on_fired(tx_all, emp)
+    lv = compute_leave(tx_all, emp); sil, tot = validate_leave_on_fired(tx_all, emp)
     st.markdown(
         f'<div class="card care"><strong>Сигнал внимания, не прогноз ухода.</strong><br>'
         f'У <strong>{lv["count"]}</strong> из {lv["checked"]} регулярных участников активность за последний квартал '
         f'снизилась более чем вдвое относительно их собственной обычной активности.<br>'
         f'<span class="muted">Возможные причины: сезонный спад, смена роли или проекта, уход близкого коллеги, '
         f'перегрузка — и лишь в числе прочего эмоциональная усталость. Рекомендация: при желании мягко '
-        f'поинтересоваться состоянием. Не используется для кадровых решений и не передаётся как «риск увольнения».</span></div>',
-        unsafe_allow_html=True)
+        f'поинтересоваться состоянием. Не используется для кадровых решений.</span></div>', unsafe_allow_html=True)
     if tot:
-        st.markdown(
-            f'<div class="card"><strong>Обоснование сигнала на истории компании.</strong> Из {tot} ранее '
-            f'уволившихся (с заметной историей участия) <strong>{sil} ({sil/tot*100:.0f}%)</strong> заметно '
-            f'замолкали в последнем квартале перед уходом — затухание участия оказывается содержательным '
-            f'ранним маркером, который стоит замечать вовремя.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="card"><strong>Обоснование на истории компании.</strong> Из {tot} ранее уволившихся '
+                    f'(с заметной историей участия) <strong>{sil} ({sil/tot*100:.0f}%)</strong> заметно замолкали '
+                    f'в последнем квартале перед уходом.</div>', unsafe_allow_html=True)
     if closed_view and lv["rows"]:
         m = emp.set_index(EMP["id"]); m = m[~m.index.duplicated(keep="first")]
         names = [{"ФИО": m["full_name"].get(p, p), "Компания": m[EMP["company"]].get(p, ""),
                   "Отдел": m[EMP["dept"]].get(p, "")} for p in lv["rows"]]
-        with st.expander(f"Список для бережного внимания ({len(names)}) — закрытый вид"):
+        with st.expander(f"Список для бережного внимания ({len(names)})"):
             st.dataframe(pd.DataFrame(names), use_container_width=True, hide_index=True)
             st.caption("Только для HR/доверенного руководителя. Care-рамка: поддержка, не санкции.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ГРАФ
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── ГРАФ ─────────────────────────
 def build_graph(fd, emp, group_by, merit_range):
     if nx is None:
-        return None, None, {}
+        return None, None
     m = emp.set_index(EMP["id"]); m = m[~m.index.duplicated(keep="first")]
     gcol = EMP["company"] if group_by == "По компаниям" else "dept_key"
     agg = fd.groupby([TX["sid"], TX["rid"]]).agg(total=(TX["merits"], "sum"), n=(TX["merits"], "size")).reset_index()
@@ -481,21 +444,7 @@ def build_graph(fd, emp, group_by, merit_range):
         G.add_edge(s, rr, weight=float(row["total"]), msgs=int(row["n"]))
     for u, v in G.edges():
         G[u][v]["mutual"] = G.has_edge(v, u)
-
-    gmembers = {}
-    for nnode in G.nodes():
-        gmembers.setdefault(G.nodes[nnode].get("group", ""), []).append(nnode)
-    Gg = nx.DiGraph()
-    for g, mem in gmembers.items():
-        Gg.add_node(g, label=g, size=len(mem), members=mem)
-    gw = {}
-    for u, v, d in G.edges(data=True):
-        gu, gv = G.nodes[u].get("group", ""), G.nodes[v].get("group", "")
-        if gu != gv:
-            gw[(gu, gv)] = gw.get((gu, gv), 0) + d["weight"]
-    for (gu, gv), w in gw.items():
-        Gg.add_edge(gu, gv, weight=w)
-    return G, Gg, gmembers
+    return G, None
 
 
 def graph_metrics(G):
@@ -529,28 +478,25 @@ def render_network_health(G, mt):
     n, e = G.number_of_nodes(), G.number_of_edges()
     vals = sorted(mt.get("pagerank", {}).values(), reverse=True)
     top10 = sum(vals[:max(1, n // 10)]) / (sum(vals) or 1)
-    rec = mt.get("reciprocity", 0)
-    n_comm = len(set(mt.get("communities", {}).values()))
+    rec = mt.get("reciprocity", 0); n_comm = len(set(mt.get("communities", {}).values()))
     n_cut = int(sum(mt.get("is_cut", {}).values()))
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Сотрудников в сети", f"{n:,}")
-    c2.metric("Связей признания", f"{e:,}")
+    c1.metric("Сотрудников в сети", f"{n:,}"); c2.metric("Связей признания", f"{e:,}")
     c3.metric("Взаимность", f"{rec:.2f}", help="Доля связей, где признание идёт в обе стороны")
-    c4.metric("Сообществ", f"{n_comm}", help="Группы плотного взаимного признания (Louvain)")
+    c4.metric("Сообществ", f"{n_comm}", help="Группы плотного взаимного признания")
     dist = "распределённое" if top10 < 0.35 else ("умеренно сосредоточенное" if top10 < 0.55 else "сильно сосредоточенное")
     st.markdown(f'<div class="card"><strong>Распределённость признания.</strong> На верхние 10% узлов приходится '
                 f'{top10*100:.0f}% признания — сеть {dist}.<br><span class="muted">Распределённое — ресурс устойчивости. '
-                f'Сосредоточенное — не «плохо»: часто естественные центры (руководители, давние сотрудники). Тревожно лишь '
-                f'в сочетании с падающей активностью этих центров.</span></div>', unsafe_allow_html=True)
+                f'Сосредоточенное часто отражает естественные центры; тревожно лишь при падении их активности.</span></div>',
+                unsafe_allow_html=True)
     if n_cut:
         st.markdown(f'<div class="card care"><strong>Незаменимые связки.</strong> {n_cut} узлов соединяют части сети, '
-                    f'которые иначе распались бы на изолированные группы.<br><span class="muted">Структурная характеристика '
-                    f'позиции, не оценка человека. Полезно, чтобы связи между подразделениями держались не на одном '
-                    f'человеке. Не подаётся сотруднику.</span></div>', unsafe_allow_html=True)
+                    f'которые иначе распались бы.<br><span class="muted">Структурная характеристика позиции, не оценка '
+                    f'человека. Полезно, чтобы межотделовые связи держались не на одном человеке.</span></div>', unsafe_allow_html=True)
 
 
 def render_distributions(G, mt):
-    st.markdown('<div class="section-header">Структурные позиции (распределения, не рейтинги)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Структурные позиции (распределения)</div>', unsafe_allow_html=True)
     if G is None or G.number_of_nodes() == 0:
         return
     pr = pd.Series(mt.get("pagerank", {})); bc = pd.Series(mt.get("betweenness", {}))
@@ -563,19 +509,15 @@ def render_distributions(G, mt):
     brok = int((bc >= bc.quantile(0.9)).sum()) if len(bc) else 0
     dvs = int((div >= div.quantile(0.9)).sum()) if len(div) else 0
     st.markdown(f'<div class="card"><strong>Широкий охват признания.</strong> ~{wide} сотрудников получают признание '
-                f'из многих частей сети. Ресурс: стабилизация ткани признания. <em>Не</em> рейтинг «лучших».</div>',
-                unsafe_allow_html=True)
+                f'из многих частей сети.</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="card"><strong>Посреднические позиции.</strong> ~{brok} сотрудников связывают разные '
-                f'подразделения. Ресурс: межотделовая интеграция. Риск: перегрузка и уязвимость связи. '
-                f'<em>Не</em> означает «самые важные люди».</div>', unsafe_allow_html=True)
+                f'подразделения. Ресурс интеграции; риск перегрузки.</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="card good"><strong>Широкая сеть контактов.</strong> ~{dvs} сотрудников признают коллег '
-                f'из многих отделов — носители горизонтальных связей.</div>', unsafe_allow_html=True)
-    st.caption("Поимённые позиции — только в закрытом меритпрофиле (HR / доверенный руководитель), через парную процедуру, без ранкинга.")
+                f'из многих отделов.</div>', unsafe_allow_html=True)
 
 
 def render_analyst(G, mt):
     st.markdown('<div class="section-header">Аналитический режим (числа)</div>', unsafe_allow_html=True)
-    st.caption("Только для аналитика. Содержательная интерпретация всегда сопровождает число (Рамка 2.8).")
     if G is None or G.number_of_nodes() == 0:
         st.info("Граф пуст."); return
     rows = [{"ФИО": G.nodes[x].get("label", ""), "Компания": G.nodes[x].get("company", ""),
@@ -588,83 +530,47 @@ def render_analyst(G, mt):
     st.download_button("📥 Метрики (CSV)", df.to_csv(index=False).encode("utf-8-sig"), "metrics.csv", "text/csv")
 
 
-def render_employee_card(fd, emp):
-    names = sorted(emp["full_name"].dropna().unique().tolist())
-    who = st.selectbox("Сотрудник", names, index=None, placeholder="выберите…")
-    if not who:
-        return
-    row = emp[emp["full_name"] == who].iloc[0]; pid = row[EMP["id"]]
-    sent, recv = fd[fd[TX["sid"]] == pid], fd[fd[TX["rid"]] == pid]
-    bal = ("сбалансированный" if abs(len(sent) - len(recv)) <= max(3, 0.3 * max(len(sent), len(recv), 1))
-           else "преимущественно отдающий" if len(sent) > len(recv) else "преимущественно получающий")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Отправлено благодарностей", f"{len(sent):,}")
-    c2.metric("Получено признаний", f"{len(recv):,}")
-    c3.metric("Стиль участия", bal)
-    st.markdown(f'<div class="card"><strong>{who}</strong> · {row.get(EMP["pos"],"")} · '
-                f'{row.get(EMP["company"],"")} / {row.get(EMP["dept"],"")}</div>', unsafe_allow_html=True)
-    if go is not None and len(recv):
-        vcr = recv.groupby(TX["value"])[TX["merits"]].size().sort_values(ascending=False)
-        fig = go.Figure(go.Bar(x=vcr.values, y=vcr.index, orientation="h", marker_color="#3fb950"))
-        fig.update_layout(template="plotly_dark", height=260, margin=dict(l=10, r=10, t=30, b=10),
-                          paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
-                          title="За какие ценности признают (входящие)", yaxis=dict(autorange="reversed"))
-        st.plotly_chart(fig, use_container_width=True)
-    if len(recv):
-        diary = recv[recv[TX["comment"]].notna()][[TX["date"], TX["value"], TX["comment"]]].tail(10)
-        if len(diary):
-            st.markdown("**Дневник благодарностей (последние):**")
-            st.dataframe(diary, use_container_width=True, hide_index=True)
-    st.caption("Парная процедура: индивидуальные характеристики читаются в сравнении с распределением отдела/организации. "
-               "Стиль участия — описание позиции в этот период, не свойство человека (Принцип 9).")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  🔧 ВРЕМЕННЫЙ БЛОК ДИАГНОСТИКИ  (удалить перед продакшеном)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── ДИАГНОСТИКА UI ─────────────────────────
 def render_diagnostics():
     st.markdown("---")
     has_err = len(Debug.errors) > 0
     title = "🔧 Диагностика — ЕСТЬ ОШИБКИ (раскройте и скопируйте)" if has_err else "🔧 Диагностика (временный блок)"
     with st.expander(title, expanded=has_err):
-        st.caption("Временный блок для отладки при загрузке на GitHub / Streamlit Cloud. "
-                   "Скопируйте текст ниже и пришлите для правки. Перед продакшеном блок можно удалить.")
+        st.caption("Временный блок для отладки при загрузке на GitHub / Streamlit Cloud. Скопируйте текст ниже.")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Окружение**"); st.json(Debug.info)
         with c2:
-            st.markdown("**Этапы выполнения**")
+            st.markdown("**Этапы**")
             if Debug.stages:
                 st.dataframe(pd.DataFrame(Debug.stages, columns=["этап", "статус", "сек", "сообщение"]),
                              use_container_width=True, hide_index=True)
         if Debug.warns:
             st.markdown("**Предупреждения**"); st.code("\n".join(Debug.warns[:50]), language="text")
         if has_err:
-            st.markdown("**Трейсбеки ошибок**")
+            st.markdown("**Трейсбеки**")
             for where, tb in Debug.errors:
                 st.code(f"# {where}\n{tb}", language="python")
-        st.markdown("**Полный отчёт одним блоком (для копирования)**")
+        st.markdown("**Полный отчёт для копирования**")
         st.text_area("report", Debug.report_text(), height=240, label_visibility="collapsed")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── MAIN ─────────────────────────
 def main():
     Debug.reset()
     for k, v in _IMPORT_ERR.items():
         Debug.errors.append((f"import {k}", v))
 
     st.markdown("""<div style="padding:1rem 0 .3rem">
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:1.7rem;font-weight:600;color:#58a6ff;">🕸️ СоциоГраф 7.0</span>
-        <span style="color:#8b949e;font-size:.85rem;margin-left:12px;">Аналитика программы «3Д Коммуникации» · ГК Термекс</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:1.7rem;font-weight:600;color:#58a6ff;">🕸️ 3Д Коммуникации</span>
+        <span style="color:#8b949e;font-size:.85rem;margin-left:12px;">Социальные технологии для бизнеса · ГК Термекс</span>
         </div>""", unsafe_allow_html=True)
 
     base = os.path.dirname(os.path.abspath(__file__))
     emp_path, tx_path = os.path.join(base, "employees.xlsx"), os.path.join(base, "dataset.xlsx")
     miss = [f for f, p in [("employees.xlsx", emp_path), ("dataset.xlsx", tx_path)] if not os.path.exists(p)]
     if miss:
-        st.error(f"❌ Не найдены файлы: {', '.join(miss)} — положите рядом с app.py")
+        st.error(f"❌ Не найдены файлы: {', '.join(miss)}")
         Debug.errors.append(("файлы", f"отсутствуют: {miss}")); render_diagnostics(); return
 
     try:
@@ -682,57 +588,58 @@ def main():
         if len(fd) == 0:
             st.warning("⚠️ Нет данных под выбранные фильтры"); render_diagnostics(); return
 
-        n_comp = fd["s_" + EMP["company"]].nunique()
-        n_dep = fd["s_dept_key"].nunique()
+        n_comp = fd["s_" + EMP["company"]].nunique(); n_dep = fd["s_dept_key"].nunique()
         n_ppl = pd.Index(fd[TX["sid"]]).append(pd.Index(fd[TX["rid"]])).nunique()
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Транзакций", f"{len(fd):,}"); c2.metric("Меритов", f"{int(fd[TX['merits']].sum()):,}")
         c3.metric("Компаний", f"{n_comp}"); c4.metric("Отделов", f"{n_dep}"); c5.metric("Сотрудников", f"{n_ppl:,}")
 
         with Debug.stage("build_graph"):
-            G, Gg, gmembers = build_graph(fd, emp, cfg["group"], cfg["merit_range"])
+            G, _ = build_graph(fd, emp, cfg["group"], cfg["merit_range"])
         with Debug.stage("graph_metrics"):
-            mt, mtg = graph_metrics(G), graph_metrics(Gg)
+            mt = graph_metrics(G)
 
-        t_org, t_unit, t_emp, t_an = st.tabs(["🏢 Организация", "🌐 Сеть и подразделения", "👤 Сотрудник", "📊 Аналитик"])
+        t_org, t_net, t_pass, t_an = st.tabs(["🏢 Организация", "🌐 Сеть и подразделения", "🪪 Меритпаспорт", "📊 Аналитик"])
 
         with t_org:
             with Debug.stage("render_funnel", fatal=False): render_funnel(compute_funnel(emp, fd))
-            with Debug.stage("render_temporal", fatal=False): render_temporal(fd)
-            with Debug.stage("render_values", fatal=False): render_values(fd)
+            with Debug.stage("render_temporal", fatal=False): render_temporal(fd, emp)
+            with Debug.stage("render_values", fatal=False): render_values(fd, emp)
+            with Debug.stage("render_grade_dynamics", fatal=False): render_grade_dynamics(tx, emp)
+            st.markdown('<div class="section-header">Рейтинг охвата</div>', unsafe_allow_html=True)
+            if panels is not None:
+                with Debug.stage("render_rating", fatal=False): panels.render_rating(fd, emp)
             with Debug.stage("render_leave", fatal=False): render_leave(tx, emp, closed_view=False)
 
-        with t_unit:
+        with t_net:
             with Debug.stage("render_network_health", fatal=False): render_network_health(G, mt)
             st.markdown('<div class="section-header">Визуализация сети</div>', unsafe_allow_html=True)
             if components is not None and social_graph_html is not None and G is not None and G.number_of_nodes() > 0:
-                st.markdown('<div class="info-box"><strong>Социальный граф.</strong> Цвет — сообщество · размер — '
-                            'охват признания · <span style="color:#3fb950">зелёные связи — взаимные</span>, серые — '
-                            'односторонние · «Только взаимные» оставляет двусторонние связи.</div>', unsafe_allow_html=True)
-                gt = st.tabs(["🌀 Социальный граф", "🌐 Иерархия групп → люди"])
+                st.markdown('<div class="info-box">Стрелка показывает направление благодарности. '
+                            '<span style="color:#3fb950">Зелёные связи — взаимные</span>. Клик по узлу подсвечивает '
+                            'его связи. Кнопка «Только взаимные» оставляет двусторонние.</div>', unsafe_allow_html=True)
+                gt = st.tabs(["🌀 Социальный граф", "🏢 Компании → отделы → люди"])
                 with gt[0]:
-                    with Debug.stage("social_graph_html", fatal=False):
-                        components.html(social_graph_html(G, mt), height=700, scrolling=False)
+                    with Debug.stage("social_graph", fatal=False):
+                        components.html(social_graph_html(G, mt), height=720, scrolling=False)
                 with gt[1]:
-                    with Debug.stage("functional_html", fatal=False):
-                        components.html(functional_html(Gg, G, gmembers, mtg, mt), height=700, scrolling=False)
+                    with Debug.stage("hierarchy", fatal=False):
+                        components.html(hierarchy_html(G, mt, None), height=720, scrolling=False)
             elif social_graph_html is None:
-                st.warning("graph_viz.py не загрузился — визуализация графа недоступна (см. диагностику).")
+                st.warning("graph_viz.py не загрузился (см. диагностику).")
             with Debug.stage("render_distributions", fatal=False): render_distributions(G, mt)
 
-        with t_emp:
-            st.markdown('<div class="section-header">Карточка сотрудника (закрытый вид)</div>', unsafe_allow_html=True)
-            st.markdown('<div class="info-box">Сотруднику показывается мерит-паспорт (его открытая статистика), а не '
-                        'аналитический синтез. Ниже — закрытый вид для HR/доверенного руководителя, через парную '
-                        'процедуру, без ранкинга.</div>', unsafe_allow_html=True)
-            with Debug.stage("employee_card", fatal=False): render_employee_card(fd, emp)
-            with Debug.stage("render_leave_closed", fatal=False): render_leave(tx, emp, closed_view=True)
+        with t_pass:
+            st.markdown('<div class="section-header">Меритпаспорт сотрудника</div>', unsafe_allow_html=True)
+            if panels is not None:
+                with Debug.stage("meritpassport", fatal=False): panels.render_meritpassport(fd, tx, emp)
+            with Debug.stage("leave_closed", fatal=False): render_leave(tx, emp, closed_view=True)
 
         with t_an:
             with Debug.stage("render_analyst", fatal=False): render_analyst(G, mt)
 
     except Exception:
-        st.error("Произошла ошибка — подробности в блоке диагностики ниже. Скопируйте и пришлите для правки.")
+        st.error("Произошла ошибка — подробности в блоке диагностики ниже.")
         if not Debug.errors or Debug.errors[-1][0] != "main":
             Debug.errors.append(("main", traceback.format_exc()))
 
