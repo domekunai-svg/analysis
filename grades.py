@@ -2,22 +2,20 @@
 """
 Маппинг ценностей Термекса → грады Болтански–Тевено и темпоральная динамика
 градовой структуры. Маппинг ПРОВИЗОРНЫЙ (демо до лингвистической валидации) —
-правится в одном месте: словарь GRADE_MAP ниже.
-Палитра — тёплая, под светлую тему дашборда.
+правится в одном месте: словарь GRADE_MAP ниже. Тёплая палитра, тема — theme.py.
 """
 import re
 import pandas as pd
+import theme
 
 GRADE_ORDER = ["Индустриальный", "Рыночный", "Гражданский", "Патриархальный",
                "Вдохновения", "Репутации", "Проектный"]
-# тёплая палитра (коралл / олива / янтарь / терракота)
 GRADE_COLORS = {
     "Индустриальный": "#5e7d16", "Рыночный": "#e95f3e", "Гражданский": "#90ae3c",
     "Патриархальный": "#c0492f", "Вдохновения": "#e0a23e", "Репутации": "#8a6d3b",
     "Проектный": "#c9871f",
 }
 
-# Провизорный маппинг 14 ценностей → доминирующий град (ключи нормализованы)
 GRADE_MAP = {
     "командная работа": "Проектный",
     "надежное плечо": "Патриархальный",
@@ -34,9 +32,6 @@ GRADE_MAP = {
     "выше ожиданий": "Рыночный",
     "гибкость": "Проектный",
 }
-
-INK = "#37312c"        # основной тёмный тёплый текст
-GRID = "rgba(55,49,44,0.08)"
 
 
 def _norm(v):
@@ -80,8 +75,8 @@ def grade_dynamics_figure(go, make_subplots, tx, unit_col, unit_value):
         ("Внутренние", "признание внутри подразделения", tx[in_unit_s & in_unit_r]),
         ("Внешние", "признание с другими подразделениями", tx[in_unit_s ^ in_unit_r]),
     ]
-    fig = make_subplots(rows=1, cols=4, shared_yaxes=True,
-                        subplot_titles=[f"{t}<br><sub>{s}</sub>" for t, s, _ in panels])
+    fig = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.04,
+                        subplot_titles=[f"<b>{t}</b><br><span style='font-size:11px'>{s}</span>" for t, s, _ in panels])
     for i, (_, _, acts) in enumerate(panels, start=1):
         share = grade_share_by_year(acts)
         if len(share) == 0:
@@ -91,11 +86,12 @@ def grade_dynamics_figure(go, make_subplots, tx, unit_col, unit_value):
                                      mode="lines+markers", line=dict(color=GRADE_COLORS[g], width=2),
                                      marker=dict(size=6), legendgroup=g, showlegend=(i == 1)),
                           row=1, col=i)
-    fig.update_layout(template="plotly_white", height=420, paper_bgcolor="rgba(0,0,0,0)",
-                      plot_bgcolor="rgba(0,0,0,0)", font=dict(color=INK, family="Golos Text, sans-serif"),
-                      margin=dict(l=10, r=10, t=70, b=10), legend=dict(orientation="h", y=-0.12),
-                      title=f"Темпоральная динамика градовой структуры — {unit_value}")
-    fig.update_xaxes(gridcolor=GRID, zeroline=False)
-    fig.update_yaxes(gridcolor=GRID, zeroline=False)
+    # заголовок графика убран (он есть в шапке секции) — чтобы тексты не наслаивались
+    fig.update_layout(template="plotly_white", height=430, paper_bgcolor="rgba(0,0,0,0)",
+                      plot_bgcolor="rgba(0,0,0,0)", font=dict(color=theme.INK, family="Golos Text, sans-serif"),
+                      margin=dict(l=46, r=10, t=64, b=10), legend=dict(orientation="h", y=-0.14))
+    fig.update_annotations(font_size=13)
+    fig.update_xaxes(gridcolor=theme.GRID, zeroline=False)
+    fig.update_yaxes(gridcolor=theme.GRID, zeroline=False)
     fig.update_yaxes(title_text="Доля града, %", row=1, col=1)
     return fig
