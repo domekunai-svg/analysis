@@ -158,6 +158,18 @@ def inject_theme(dark):
     st.markdown(css, unsafe_allow_html=True)
 
 
+def localize_widgets():
+    if components is None:
+        return
+    try:
+        components.html("<script>setInterval(function(){try{var d=window.parent.document;if(!d)return;"
+                        "d.querySelectorAll('li,div,span,button,p').forEach(function(n){if(n.childElementCount===0){"
+                        "var t=n.textContent.trim();if(t==='Select all'){n.textContent='Выбрать всё';}"
+                        "else if(t==='Choose an option'){n.textContent='Выберите…';}}});}catch(e){}},700);</script>", height=0)
+    except Exception:
+        pass
+
+
 def logo_html(base):
     p = os.path.join(base, "logo.png")
     if os.path.exists(p):
@@ -683,7 +695,7 @@ def compute_leave_monthly(tx_all, emp):
         if last_days < 25 and len(months) > 1:
             months = months[:-1]
             per = per[months]
-    counts, sig_month, sig_detail = [], {}, {}
+    counts, sig_month, sig_detail, month_signals = [], {}, {}, {}
     for i, mo in enumerate(months):
         if i < 3:
             counts.append(0); continue
@@ -691,13 +703,14 @@ def compute_leave_monthly(tx_all, emp):
         cur = per[mo]
         flag = (base >= 2) & (cur < 0.5 * base)
         counts.append(int(flag.sum()))
+        month_signals[str(mo)] = list(per.index[flag])
         for pid in per.index[flag]:
             sig_month[pid] = str(mo)
             sig_detail[pid] = (int(cur[pid]), round(float(base[pid]), 1))
     cur_mo = str(months[-1]) if months else None
     rows = [pid for pid, mo in sig_month.items() if mo == cur_mo]
     return dict(months=[str(m) for m in months], counts=counts, current_month=cur_mo,
-                rows=rows, detail=sig_detail)
+                rows=rows, detail=sig_detail, month_signals=month_signals)
 
 
 def validate_leave_on_fired(tx_all, emp):
@@ -721,7 +734,16 @@ def render_leave(tx_all, emp, closed_view):
     lv = compute_leave_monthly(tx_all, emp)
     sil, tot = validate_leave_on_fired(tx_all, emp)
     if go is not None and lv["months"]:
-        fig = go.Figure(go.Bar(x=lv["months"], y=lv["counts"], marker_color=AMBER))
+        mm = emp.set_index(EMP["id"]); mm = mm[~mm.index.duplicated(keep="first")]
+        ms = lv.get("month_signals", {})
+        names = []
+        for mo in lv["months"]:
+            pids = ms.get(mo, [])
+            nm = [str(mm["full_name"].get(p, p)) for p in pids[:14]]
+            extra = len(pids) - len(nm)
+            names.append(("<br>".join(nm) + (f"<br>…ещё {extra}" if extra > 0 else "")) if nm else "—")
+        fig = go.Figure(go.Bar(x=lv["months"], y=lv["counts"], customdata=names, marker_color=AMBER,
+            hovertemplate="<b>%{x}</b><br>Сигналов: %{y}<br><br><b>Кто:</b><br>%{customdata}<extra></extra>"))
         light(fig, "Сколько участников в каждом месяце снизили активность вдвое+ относительно своих 3 предыдущих месяцев", 240)
         st.plotly_chart(fig, use_container_width=True, key=f"leave_chart_{closed_view}")
     n_now = len(lv["rows"])
@@ -858,7 +880,6 @@ def render_vertical(fd, emp):
                         f'от специалистов.<br><span class="muted">Сигнал внимания, не оценка: возможны разные причины '
                         f'(роль вне прямого контакта, фрейм отдела, специфика функции). Читать через парную процедуру.</span></div>',
                         unsafe_allow_html=True)
-    st.caption("Уровень рук/спец — из HR-справочника (заполнен на 100%). Кураторское дерево (кто чей руководитель) — Этап 4.")
 
 
 def render_curator(fd, emp, cur):
@@ -888,21 +909,26 @@ def render_curator(fd, emp, cur):
     n_m = len(mgrs)
     a, b, c4, d = st.columns(4)
     a.metric("Руководителей (привязано)", f"{n_m}")
-    b.metric("Признают подчинённых", f"{np.mean(dri_list)*100:.0f}%", help="DRI: средняя доля подчинённых, которых руководитель поблагодарил хотя бы раз")
+    b.metric("Признают подчинённых", f"{np.mean(dri_list)*100:.0f}%", help="средняя доля подчинённых, которых руководитель поблагодарил хотя бы раз")
     c4.metric("Признаны подчинёнными", f"{np.mean(up_list)*100:.0f}%", help="средняя доля подчинённых, признавших своего руководителя")
-    d.metric("Руковод.-центричность", f"{np.mean(mc_list)*100:.0f}%" if mc_list else "—", help="MC: доля внутригрупповых актов с участием руководителя")
+    d.metric("Руковод.-центричность", f"{np.mean(mc_list)*100:.0f}%" if mc_list else "—", help="доля внутригрупповых актов с участием руководителя")
 
-    buckets = {"0% (никого)": 0, "<50%": 0, "50–99%": 0, "100% (всех)": 0}
-    for v in dri_list:
-        if v == 0: buckets["0% (никого)"] += 1
-        elif v < 0.5: buckets["<50%"] += 1
-        elif v < 1: buckets["50–99%"] += 1
-        else: buckets["100% (всех)"] += 1
+    mm = emp.set_index(EMP["id"]); mm = mm[~mm.index.duplicated(keep="first")]
+    keys = ["0% (никого)", "<50%", "50–99%", "100% (всех)"]
+    bnames = {k: [] for k in keys}
+    for (cid, _subs), v in zip(mgrs, dri_list):
+        k = "0% (никого)" if v == 0 else "<50%" if v < 0.5 else "50–99%" if v < 1 else "100% (всех)"
+        bnames[k].append(str(mm["full_name"].get(cid, cid)))
+    bcust = []
+    for k in keys:
+        nm = bnames[k][:16]; extra = len(bnames[k]) - len(nm)
+        bcust.append(("<br>".join(nm) + (f"<br>…ещё {extra}" if extra > 0 else "")) if nm else "—")
     g1, g2 = st.columns([3, 2], vertical_alignment="center")
     with g1:
         if go is not None:
-            fig = go.Figure(go.Bar(x=list(buckets.keys()), y=list(buckets.values()), marker_color=CORAL))
-            light(fig, "Сколько руководителей какой доле подчинённых дали признание (DRI)", 300)
+            fig = go.Figure(go.Bar(x=keys, y=[len(bnames[k]) for k in keys], customdata=bcust, marker_color=CORAL,
+                hovertemplate="<b>%{x}</b><br>Руководителей: %{y}<br><br><b>Кто:</b><br>%{customdata}<extra></extra>"))
+            light(fig, "Сколько руководителей какой доле подчинённых дали признание", 300)
             st.plotly_chart(fig, use_container_width=True)
     with g2:
         st.markdown(f'<div class="card care"><strong>Руководители без признания подчинённых.</strong> '
@@ -988,8 +1014,30 @@ def hierarchy_html(G_people, mt_people):
     return _HIER.replace("__PEOPLE__", json.dumps(people)).replace("__PEDGES__", json.dumps(pe))
 
 
+def org_graph_html(emp, curators):
+    cts = curators.get("cur_to_subs", {}) if curators else {}
+    stc = curators.get("sub_to_curs", {}) if curators else {}
+    if not cts:
+        return None
+    m = emp.set_index(EMP["id"]); m = m[~m.index.duplicated(keep="first")]
+    people = set(cts.keys()) | set(stc.keys())
+    nsub = {c: len(v) for c, v in cts.items()}
+    nodes = []
+    for pid in people:
+        if pid in m.index:
+            r = m.loc[pid]
+            label = f"{r.get(EMP['last'],'')} {str(r.get(EMP['first'],''))[:1]}.".strip()
+            nodes.append(dict(id=pid, label=label, role=str(r.get("Уровень", "")), dept=str(r.get(EMP["dept"], "")),
+                              company=str(r.get(EMP["company"], "")), position=str(r.get(EMP["pos"], "")), nsub=nsub.get(pid, 0)))
+        else:
+            nodes.append(dict(id=pid, label=pid, role="", dept="", company="", position="", nsub=nsub.get(pid, 0)))
+    edges = [dict(source=sub, target=cur) for sub, curs in stc.items() for cur in curs if sub in people and cur in people]
+    return _ORG.replace("__ONODES__", json.dumps(nodes)).replace("__OEDGES__", json.dumps(edges))
+
+
 _SOCIAL = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\n<script src=\"https://d3js.org/d3.v7.min.js\"></script>\n<style> body{margin:0;background:#262220;font-family:'Golos Text',-apple-system,sans-serif;overflow:hidden} #viz{width:100%;height:100vh} .controls{position:absolute;top:12px;right:12px;z-index:1000;display:flex;gap:6px} .btn{background:#332e29;color:#e9d9c8;border:1px solid #3a342f;padding:6px 14px;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'Golos Text',sans-serif} .btn:hover{background:#3a342f} .btn.on{background:#90ae3c;color:#262220;border-color:#90ae3c} #bc{position:absolute;top:14px;left:14px;color:#f3724f;font-family:'Golos Text',sans-serif;font-size:13px;font-weight:600} #tip{position:absolute;background:#2a2521;border:1px solid #3a342f;color:#f1e8e2;padding:10px 14px;border-radius:10px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .2s;max-width:240px;line-height:1.6}</style></head><body>\n<div class=\"controls\">\n <button class=\"btn\" onclick=\"rz()\">↺ Сброс</button>\n <button class=\"btn\" onclick=\"tl()\">Метки</button>\n <button class=\"btn\" id=\"cb\" onclick=\"tc()\">Роль</button>\n <button class=\"btn\" id=\"mb\" onclick=\"tm()\">Только взаимные</button>\n <button class=\"btn\" onclick=\"tp()\">Физика</button>\n</div>\n<div id=\"tip\"></div><svg id=\"viz\"></svg>\n<script>\nfunction CW(){const v=document.getElementById(\"viz\");return (v&&v.clientWidth)||innerWidth;}\nfunction CH(){const v=document.getElementById(\"viz\");return (v&&v.clientHeight)||innerHeight;}\nconst nodes=__NODES__,allLinks=__LINKS__,colors=__COLORS__;\nlet links=allLinks.slice(), mutualOnly=false, labelsOn=true;\nlet selected=new Set(),colorMode=\"comm\";\nconst byId={}; nodes.forEach(n=>byId[n.id]=n);\nconst adj={}; nodes.forEach(n=>adj[n.id]=new Set());\nallLinks.forEach(l=>{adj[l.source].add(l.target);adj[l.target].add(l.source);});\nconst prv=nodes.map(n=>n.pagerank),mn=Math.min(...prv),mx=Math.max(...prv),rg=(mx-mn)||1;\nconst R=d=>3+27*Math.pow((d.pagerank-mn)/rg,0.7);\nconst RMIN=3,RMAX=30,NB=5;\nfunction rb(id){const n=byId[id];if(!n)return 0;return Math.max(0,Math.min(NB-1,Math.floor((R(n)-RMIN)/(RMAX-RMIN)*NB)));}\nfunction eid(x){return (x&&x.id!==undefined)?x.id:x;}\nfunction ekey(l){const s=eid(l.source),t=eid(l.target);return s<t?s+\"|\"+t:t+\"|\"+s;}\nconst svg=d3.select(\"#viz\").attr(\"width\",\"100%\").attr(\"height\",\"100%\");\nconst defs=svg.append(\"defs\");\nfunction mk(prefix,color){for(let b=0;b<NB;b++){const sz=7+b*3;\n  defs.append(\"marker\").attr(\"id\",prefix+b).attr(\"viewBox\",\"0 -5 10 10\").attr(\"refX\",9).attr(\"refY\",0)\n   .attr(\"markerUnits\",\"userSpaceOnUse\").attr(\"markerWidth\",sz).attr(\"markerHeight\",sz).attr(\"orient\",\"auto\")\n   .append(\"path\").attr(\"d\",\"M0,-4L8,0L0,4\").attr(\"fill\",color);}}\nmk(\"arr\",\"#5a524b\"); mk(\"arrm\",\"#90ae3c\");\nconst g=svg.append(\"g\");\nconst zoom=d3.zoom().scaleExtent([.05,12]).on(\"zoom\",e=>g.attr(\"transform\",e.transform));\nsvg.call(zoom);\nsvg.on(\"click\",()=>{selected.clear();refresh();});\nlet link=g.append(\"g\"), node, labels;\nfunction drawLinks(){\n link.selectAll(\"line\").remove();\n window._le=link.selectAll(\"line\").data(links).join(\"line\")\n   .attr(\"stroke\",d=>d.mutual?\"#90ae3c\":\"#3a342f\").attr(\"stroke-opacity\",.55)\n   .attr(\"stroke-width\",d=>Math.sqrt(d.weight)*.6+.4)\n   .attr(\"marker-end\",d=>\"url(#\"+(d.mutual?\"arrm\":\"arr\")+rb(eid(d.target))+\")\");\n}\ndrawLinks();\nfunction nodeFill(d){return colorMode===\"role\"?(d.role===\"рук\"?\"#e95f3e\":\"#6b8e23\"):colors[d.community%colors.length];}\nnode=g.append(\"g\").selectAll(\"circle\").data(nodes).join(\"circle\")\n .attr(\"r\",R).attr(\"fill\",nodeFill).attr(\"stroke\",\"#262220\").attr(\"stroke-width\",1.5).attr(\"cursor\",\"pointer\")\n .on(\"click\",(e,d)=>{e.stopPropagation(); if(e.ctrlKey||e.metaKey){selected.has(d.id)?selected.delete(d.id):selected.add(d.id);} else {selected=new Set([d.id]);} refresh();})\n .on(\"mouseover\",(e,d)=>{const t=document.getElementById(\"tip\");\n   t.innerHTML=`<strong>${d.label}</strong><br>${d.position}<br><span style=\"color:#f3724f\">${d.company}</span> / ${d.dept}<hr style=\"border-color:#3a342f;margin:6px 0\">Входящих: ${d.ins.toFixed(0)} · Исходящих: ${d.outs.toFixed(0)}<br><em style=\"color:#a89d95\">клик — связи · Ctrl+клик — путь между узлами</em>`;\n   t.style.opacity=1;t.style.left=(e.pageX+12)+\"px\";t.style.top=(e.pageY-10)+\"px\";})\n .on(\"mouseout\",()=>document.getElementById(\"tip\").style.opacity=0)\n .call(d3.drag().on(\"start\",(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})\n   .on(\"drag\",(e,d)=>{d.fx=e.x;d.fy=e.y;}).on(\"end\",(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));\nlabels=g.append(\"g\").selectAll(\"text\").data(nodes).join(\"text\").attr(\"fill\",\"#a89d95\").attr(\"font-size\",\"10px\").attr(\"text-anchor\",\"middle\").attr(\"dy\",d=>-R(d)-3).attr(\"pointer-events\",\"none\")\n .text(d=>d.label.length>18?d.label.slice(0,18)+\"…\":d.label);\nfunction bfs(a,b){const prev={},q=[a],seen=new Set([a]);\n while(q.length){const cur=q.shift();if(cur===b){const p=[b];let c=b;while(c!==a){c=prev[c];p.unshift(c);}return p;}\n   adj[cur].forEach(nx=>{if(!seen.has(nx)){seen.add(nx);prev[nx]=cur;q.push(nx);}});}\n return null;}\nlet pathNodes=new Set(),pathEdges=new Set();\nfunction recomputePaths(){pathNodes=new Set();pathEdges=new Set();const sel=[...selected];\n for(let i=0;i<sel.length;i++)for(let j=i+1;j<sel.length;j++){const p=bfs(sel[i],sel[j]);if(!p)continue;\n   p.forEach(x=>pathNodes.add(x));for(let k=0;k+1<p.length;k++){const a=p[k],b=p[k+1];pathEdges.add(a<b?a+\"|\"+b:b+\"|\"+a);}}}\nfunction markSel(){node.attr(\"stroke\",d=>selected.has(d.id)?\"#faf2ea\":\"#262220\").attr(\"stroke-width\",d=>selected.has(d.id)?2.5:1.5);}\nfunction refresh(){\n if(selected.size===0){node.attr(\"opacity\",1);markSel();labels.style(\"opacity\",labelsOn?1:0);window._le.attr(\"stroke-opacity\",.55).attr(\"stroke\",d=>d.mutual?\"#90ae3c\":\"#3a342f\");return;}\n if(selected.size===1){const sid=[...selected][0],near=adj[sid];\n   node.attr(\"opacity\",d=>(d.id===sid||near.has(d.id))?1:.12);\n   labels.style(\"opacity\",d=>(labelsOn&&(d.id===sid||near.has(d.id)))?1:0);\n   window._le.attr(\"stroke-opacity\",l=>(eid(l.source)===sid||eid(l.target)===sid)?.95:.05)\n            .attr(\"stroke\",l=>(eid(l.source)===sid||eid(l.target)===sid)?\"#f3724f\":(l.mutual?\"#90ae3c\":\"#3a342f\"));\n   markSel();return;}\n recomputePaths();\n node.attr(\"opacity\",d=>pathNodes.has(d.id)?1:.1);\n labels.style(\"opacity\",d=>(labelsOn&&pathNodes.has(d.id))?1:0);\n window._le.attr(\"stroke-opacity\",l=>pathEdges.has(ekey(l))?.95:.04).attr(\"stroke\",l=>pathEdges.has(ekey(l))?\"#f3724f\":(l.mutual?\"#90ae3c\":\"#3a342f\"));\n markSel();}\nconst sim=d3.forceSimulation(nodes)\n .force(\"link\",d3.forceLink(links).id(d=>d.id).distance(70))\n .force(\"charge\",d3.forceManyBody().strength(-200))\n .force(\"center\",d3.forceCenter(CW()/2,CH()/2))\n .force(\"collision\",d3.forceCollide().radius(d=>R(d)+3))\n .on(\"tick\",()=>{window._le.each(function(d){const s=d.source,t=d.target,dx=t.x-s.x,dy=t.y-s.y,dist=Math.hypot(dx,dy)||1,r=R(t),ux=dx/dist,uy=dy/dist;\n     d3.select(this).attr(\"x1\",s.x).attr(\"y1\",s.y).attr(\"x2\",t.x-ux*r).attr(\"y2\",t.y-uy*r);});\n   node.attr(\"cx\",d=>d.x).attr(\"cy\",d=>d.y);labels.attr(\"x\",d=>d.x).attr(\"y\",d=>d.y);});\nfunction rz(){svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity);}\nfunction tl(){labelsOn=!labelsOn;refresh();}\nfunction tm(){mutualOnly=!mutualOnly;document.getElementById(\"mb\").classList.toggle(\"on\",mutualOnly);\n  links=mutualOnly?allLinks.filter(l=>l.mutual):allLinks.slice();\n  sim.force(\"link\",d3.forceLink(links).id(d=>d.id).distance(70));drawLinks();refresh();sim.alpha(.3).restart();}\nlet po=true;function tp(){po=!po;po?sim.alpha(.3).restart():sim.stop();}\n\ntry{new ResizeObserver(()=>{if(CW()>1&&CH()>1){sim.force(\"center\",d3.forceCenter(CW()/2,CH()/2)).alpha(.25).restart();}}).observe(document.getElementById(\"viz\"));}catch(e){}\n\nfunction tc(){colorMode=colorMode===\"comm\"?\"role\":\"comm\";var b=document.getElementById(\"cb\");if(b)b.classList.toggle(\"on\",colorMode===\"role\");node.attr(\"fill\",nodeFill);}\n\n</script></body></html>"
 _HIER = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\n<script src=\"https://d3js.org/d3.v7.min.js\"></script>\n<style> body{margin:0;background:#262220;font-family:'Golos Text',-apple-system,sans-serif;overflow:hidden} #viz{width:100%;height:100vh} .controls{position:absolute;top:12px;right:12px;z-index:1000;display:flex;gap:6px} .btn{background:#332e29;color:#e9d9c8;border:1px solid #3a342f;padding:6px 14px;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'Golos Text',sans-serif} .btn:hover{background:#3a342f} .btn.on{background:#90ae3c;color:#262220;border-color:#90ae3c} #bc{position:absolute;top:14px;left:14px;color:#f3724f;font-family:'Golos Text',sans-serif;font-size:13px;font-weight:600} #tip{position:absolute;background:#2a2521;border:1px solid #3a342f;color:#f1e8e2;padding:10px 14px;border-radius:10px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .2s;max-width:240px;line-height:1.6}</style></head><body>\n<div id=\"bc\">Уровень: Компании</div>\n<div class=\"controls\">\n <button class=\"btn\" onclick=\"back()\">← Назад</button>\n <button class=\"btn\" onclick=\"home()\">↺ Компании</button>\n <button class=\"btn\" onclick=\"allDepts()\">Все отделы ГК</button>\n <button class=\"btn\" onclick=\"rz()\">⊕ Сброс</button>\n <button class=\"btn\" onclick=\"tp()\">Физика</button>\n</div>\n<div id=\"tip\"></div><svg id=\"viz\"></svg>\n<script>\nfunction CW(){const v=document.getElementById(\"viz\");return (v&&v.clientWidth)||innerWidth;}\nfunction CH(){const v=document.getElementById(\"viz\");return (v&&v.clientHeight)||innerHeight;}\nconst PEOPLE=__PEOPLE__,PE=__PEDGES__;\nconst byId={}; PEOPLE.forEach(p=>byId[p.id]=p);\nconst peSet=new Set(); PE.forEach(l=>peSet.add(l.source+\">\"+l.target));\nlet nodes=[],links=[],level=\"companies\",sim,navStack=[{t:\"companies\"}],selected=new Set(),adj={},curMax=1,curById={};\nconst svg=d3.select(\"#viz\").attr(\"width\",\"100%\").attr(\"height\",\"100%\");\nconst defs=svg.append(\"defs\"),NB=5;\nfunction mk(prefix,color){for(let b=0;b<NB;b++){const sz=7+b*3;\n  defs.append(\"marker\").attr(\"id\",prefix+b).attr(\"viewBox\",\"0 -5 10 10\").attr(\"refX\",9).attr(\"refY\",0)\n   .attr(\"markerUnits\",\"userSpaceOnUse\").attr(\"markerWidth\",sz).attr(\"markerHeight\",sz).attr(\"orient\",\"auto\")\n   .append(\"path\").attr(\"d\",\"M0,-4L8,0L0,4\").attr(\"fill\",color);}}\nmk(\"arr\",\"#5a524b\"); mk(\"arrm\",\"#90ae3c\");\nconst g=svg.append(\"g\");\nconst zoom=d3.zoom().scaleExtent([.05,12]).on(\"zoom\",e=>g.attr(\"transform\",e.transform));svg.call(zoom);\nsvg.on(\"click\",()=>{if(level===\"people\"){selected.clear();hl();}});\nlet le,ne,la;\nfunction Rof(d){return d.person?6:(8+22*Math.sqrt(d.size/curMax));}\nfunction rb(d){return Math.max(0,Math.min(NB-1,Math.floor((Rof(d)-6)/(30-6)*NB)));}\nfunction eid(x){return (x&&x.id!==undefined)?x.id:x;}\nfunction aggregate(keyFn,labelFn,extra){\n const groups={}; PEOPLE.forEach(p=>{const k=keyFn(p);(groups[k]=groups[k]||[]).push(p);});\n const nd=Object.entries(groups).map(([k,mem])=>Object.assign({id:k,label:labelFn(k),size:mem.length,members:new Set(mem.map(m=>m.id))},extra?extra(k):{}));\n const ew={}; PE.forEach(l=>{const a=byId[l.source],b=byId[l.target];if(!a||!b)return;const ka=keyFn(a),kb=keyFn(b);if(ka===kb)return;const key=ka+\"||\"+kb;ew[key]=(ew[key]||0)+l.weight;});\n const ed=Object.entries(ew).map(([k,w])=>{const p=k.split(\"||\");return{source:p[0],target:p[1],weight:w,mutual:!!ew[p[1]+\"||\"+p[0]]};});\n return {nodes:nd,links:ed};\n}\nfunction makeCompanies(){const a=aggregate(p=>p.company||\"—\",k=>k);return{nodes:a.nodes,links:a.links,level:\"companies\",crumb:\"Компании\"};}\nfunction makeAllDepts(){const a=aggregate(p=>p.deptkey||\"—\",k=>k.split(\" / \").pop());return{nodes:a.nodes,links:a.links,level:\"alldepts\",crumb:\"Все отделы ГК\"};}\nfunction makeDepts(company){\n const sub=PEOPLE.filter(p=>(p.company||\"—\")===company);const ids=new Set(sub.map(p=>p.id));\n const groups={};sub.forEach(p=>{(groups[p.deptkey]=groups[p.deptkey]||[]).push(p);});\n const nd=Object.entries(groups).map(([k,mem])=>({id:k,label:k.split(\" / \").pop(),size:mem.length,members:new Set(mem.map(m=>m.id))}));\n const ew={};PE.forEach(l=>{if(!ids.has(l.source)||!ids.has(l.target))return;const a=byId[l.source],b=byId[l.target];if(a.deptkey===b.deptkey)return;const key=a.deptkey+\"||\"+b.deptkey;ew[key]=(ew[key]||0)+l.weight;});\n const ed=Object.entries(ew).map(([k,w])=>{const p=k.split(\"||\");return{source:p[0],target:p[1],weight:w,mutual:!!ew[p[1]+\"||\"+p[0]]};});\n return{nodes:nd,links:ed,level:\"depts\",crumb:company+\" → отделы\"};\n}\nfunction makePeople(deptkey){\n const sub=PEOPLE.filter(p=>p.deptkey===deptkey);const ids=new Set(sub.map(p=>p.id));\n const nd=sub.map(p=>({id:p.id,label:p.label,size:1,person:true,position:p.position,company:p.company,dept:p.dept,ins:p.ins,outs:p.outs,role:p.role}));\n const ed=PE.filter(l=>ids.has(l.source)&&ids.has(l.target)).map(l=>({source:l.source,target:l.target,weight:l.weight,mutual:peSet.has(l.target+\">\"+l.source)}));\n return{nodes:nd,links:ed,level:\"people\",crumb:deptkey};\n}\nfunction build(desc){\n if(desc.t===\"companies\")return makeCompanies();\n if(desc.t===\"alldepts\")return makeAllDepts();\n if(desc.t===\"depts\")return makeDepts(desc.company);\n return makePeople(desc.deptkey);\n}\nfunction go(desc,push){\n if(push)navStack.push(desc);\n const r=build(desc);nodes=r.nodes;links=r.links;level=r.level;selected.clear();\n curMax=Math.max(1,...nodes.map(n=>n.size));\n adj={};curById={};nodes.forEach(n=>{adj[n.id]=new Set();curById[n.id]=n;});links.forEach(l=>{adj[l.source].add(l.target);adj[l.target].add(l.source);});\n document.getElementById(\"bc\").textContent=\"Уровень: \"+navStack.map(crumbOf).join(\"  ›  \");\n sim&&sim.stop();init();recenter();\n}\nfunction recenter(){svg.call(zoom.transform,d3.zoomIdentity);setTimeout(()=>{if(sim){sim.force(\"center\",d3.forceCenter(CW()/2,CH()/2)).alpha(.5).restart();}svg.call(zoom.transform,d3.zoomIdentity);},90);}\nfunction crumbOf(d){return d.t===\"companies\"?\"Компании\":d.t===\"alldepts\"?\"Все отделы\":d.t===\"depts\"?d.company:d.deptkey.split(\" / \").pop();}\nfunction back(){if(navStack.length>1){navStack.pop();go(navStack[navStack.length-1],false);}}\nfunction home(){navStack=[{t:\"companies\"}];go(navStack[0],false);}\nfunction allDepts(){navStack=[{t:\"companies\"},{t:\"alldepts\"}];go(navStack[1],false);}\nfunction hl(){\n if(level!==\"people\"||selected.size===0){ne.attr(\"opacity\",1);window._lh&&window._lh.attr(\"stroke-opacity\",.6);return;}\n const sid=[...selected][0],near=adj[sid];\n ne.attr(\"opacity\",d=>(d.id===sid||near.has(d.id))?1:.12);\n window._lh.attr(\"stroke-opacity\",l=>(eid(l.source)===sid||eid(l.target)===sid)?.95:.05).attr(\"stroke\",l=>(eid(l.source)===sid||eid(l.target)===sid)?\"#f3724f\":(l.mutual?\"#90ae3c\":\"#3a342f\"));\n}\nfunction init(){\n g.selectAll(\"*\").remove();\n le=g.append(\"g\"); window._lh=le.selectAll(\"line\").data(links).join(\"line\").attr(\"stroke\",d=>d.mutual?\"#90ae3c\":\"#3a342f\").attr(\"stroke-opacity\",.6).attr(\"stroke-width\",d=>Math.sqrt(d.weight)*.4+.6).attr(\"marker-end\",d=>\"url(#\"+(d.mutual?\"arrm\":\"arr\")+rb(curById[eid(d.target)]||{size:1,person:false})+\")\");\n ne=g.append(\"g\").selectAll(\"circle\").data(nodes).join(\"circle\")\n  .attr(\"r\",Rof).attr(\"fill\",d=>d.person?(d.role===\"рук\"?\"#e95f3e\":\"#6b8e23\"):(level===\"companies\"?\"#e95f3e\":\"#cf8b22\")).attr(\"stroke\",\"#262220\").attr(\"stroke-width\",2).attr(\"cursor\",\"pointer\")\n  .on(\"click\",(e,d)=>{e.stopPropagation();\n     if(level===\"companies\")go({t:\"depts\",company:d.id},true);\n     else if(level===\"depts\"||level===\"alldepts\")go({t:\"people\",deptkey:d.id},true);\n     else {selected=new Set([d.id]);hl();}})\n  .on(\"mouseover\",(e,d)=>{const t=document.getElementById(\"tip\");\n    t.innerHTML=d.person?`<strong>${d.label}</strong><br>${d.position}<br><span style=\"color:#f3724f\">${d.company}</span> / ${d.dept}<br>Входящих: ${d.ins.toFixed(0)} · Исходящих: ${d.outs.toFixed(0)}`:`<strong>${d.label}</strong><br>Участников: ${d.size}<br><em style=\"color:#a89d95\">клик — раскрыть</em>`;\n    t.style.opacity=1;t.style.left=(e.pageX+12)+\"px\";t.style.top=(e.pageY-10)+\"px\";})\n  .on(\"mouseout\",()=>document.getElementById(\"tip\").style.opacity=0)\n  .call(d3.drag().on(\"start\",(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})\n   .on(\"drag\",(e,d)=>{d.fx=e.x;d.fy=e.y;}).on(\"end\",(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));\n la=g.append(\"g\").selectAll(\"text\").data(nodes).join(\"text\").attr(\"fill\",\"#a89d95\").attr(\"font-size\",\"10px\").attr(\"text-anchor\",\"middle\").attr(\"dy\",d=>-Rof(d)-3).attr(\"pointer-events\",\"none\").text(d=>d.label&&d.label.length>22?d.label.slice(0,22)+\"…\":d.label);\n sim=d3.forceSimulation(nodes).force(\"link\",d3.forceLink(links).id(d=>d.id).distance(level===\"people\"?70:150))\n  .force(\"charge\",d3.forceManyBody().strength(level===\"people\"?-160:-360)).force(\"center\",d3.forceCenter(CW()/2,CH()/2))\n  .force(\"collision\",d3.forceCollide().radius(d=>Rof(d)+6))\n  .on(\"tick\",()=>{window._lh.each(function(d){const s=d.source,t=d.target,dx=t.x-s.x,dy=t.y-s.y,dist=Math.hypot(dx,dy)||1,r=Rof(t),ux=dx/dist,uy=dy/dist;\n      d3.select(this).attr(\"x1\",s.x).attr(\"y1\",s.y).attr(\"x2\",t.x-ux*r).attr(\"y2\",t.y-uy*r);});\n    ne.attr(\"cx\",d=>d.x).attr(\"cy\",d=>d.y);la.attr(\"x\",d=>d.x).attr(\"y\",d=>d.y);});\n}\nfunction rz(){svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity);}\nlet po=true;function tp(){po=!po;po?sim.alpha(.3).restart():sim.stop();}\ngo(navStack[0],false);\n\ntry{new ResizeObserver(()=>{if(CW()>1&&CH()>1){if(sim){sim.force(\"center\",d3.forceCenter(CW()/2,CH()/2)).alpha(.35).restart();}svg.call(zoom.transform,d3.zoomIdentity);}}).observe(document.getElementById(\"viz\"));}catch(e){}\n\n</script></body></html>"
+_ORG = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\n<script src=\"https://d3js.org/d3.v7.min.js\"></script>\n<style> body{margin:0;background:#262220;font-family:'Golos Text',-apple-system,sans-serif;overflow:hidden} #viz{width:100%;height:100vh} .controls{position:absolute;top:12px;right:12px;z-index:1000;display:flex;gap:6px} .btn{background:#332e29;color:#e9d9c8;border:1px solid #3a342f;padding:6px 14px;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;font-family:'Golos Text',sans-serif} .btn:hover{background:#3a342f} .btn.on{background:#90ae3c;color:#262220;border-color:#90ae3c} #bc{position:absolute;top:14px;left:14px;color:#f3724f;font-family:'Golos Text',sans-serif;font-size:13px;font-weight:600} #tip{position:absolute;background:#2a2521;border:1px solid #3a342f;color:#f1e8e2;padding:10px 14px;border-radius:10px;font-size:12px;pointer-events:none;opacity:0;transition:opacity .2s;max-width:240px;line-height:1.6}</style></head><body>\n<div class=\"controls\">\n <button class=\"btn\" onclick=\"rz()\">↺ Сброс</button>\n <button class=\"btn\" onclick=\"tl()\">Метки</button>\n <button class=\"btn\" onclick=\"tp()\">Физика</button>\n</div>\n<div id=\"tip\"></div><svg id=\"viz\"></svg>\n<script>\nfunction CW(){const v=document.getElementById(\"viz\");return (v&&v.clientWidth)||innerWidth;}\nfunction CH(){const v=document.getElementById(\"viz\");return (v&&v.clientHeight)||innerHeight;}\nconst nodes=__ONODES__, links=__OEDGES__;\nconst byId={}; nodes.forEach(n=>byId[n.id]=n);\nconst adj={}; nodes.forEach(n=>adj[n.id]=new Set());\nlinks.forEach(l=>{adj[l.source].add(l.target);adj[l.target].add(l.source);});\nconst mx=Math.max(1,...nodes.map(n=>n.nsub||0));\nconst R=d=>6+18*Math.sqrt((d.nsub||0)/mx);\nfunction eid(x){return (x&&x.id!==undefined)?x.id:x;}\nfunction rcol(d){return d.role===\"рук\"?\"#e95f3e\":(d.role===\"спец\"?\"#6b8e23\":\"#a89d95\");}\nconst svg=d3.select(\"#viz\").attr(\"width\",\"100%\").attr(\"height\",\"100%\");\nconst defs=svg.append(\"defs\");\ndefs.append(\"marker\").attr(\"id\",\"oarr\").attr(\"viewBox\",\"0 -5 10 10\").attr(\"refX\",9).attr(\"refY\",0).attr(\"markerUnits\",\"userSpaceOnUse\").attr(\"markerWidth\",9).attr(\"markerHeight\",9).attr(\"orient\",\"auto\").append(\"path\").attr(\"d\",\"M0,-4L8,0L0,4\").attr(\"fill\",\"#5a524b\");\nconst g=svg.append(\"g\");\nconst zoom=d3.zoom().scaleExtent([.04,12]).on(\"zoom\",e=>g.attr(\"transform\",e.transform));svg.call(zoom);\nlet selected=null,labelsOn=false;\nsvg.on(\"click\",()=>{selected=null;refresh();});\nconst link=g.append(\"g\").selectAll(\"line\").data(links).join(\"line\").attr(\"stroke\",\"#3a342f\").attr(\"stroke-opacity\",.5).attr(\"stroke-width\",1).attr(\"marker-end\",\"url(#oarr)\");\nconst node=g.append(\"g\").selectAll(\"circle\").data(nodes).join(\"circle\").attr(\"r\",R).attr(\"fill\",rcol).attr(\"stroke\",\"#262220\").attr(\"stroke-width\",1.5).attr(\"cursor\",\"pointer\")\n  .on(\"click\",(e,d)=>{e.stopPropagation();selected=(selected===d.id?null:d.id);refresh();})\n  .on(\"mouseover\",(e,d)=>{const t=document.getElementById(\"tip\");\n    t.innerHTML=`<strong>${d.label}</strong><br>${d.position}<br><span style=\"color:#f3724f\">${d.company}</span> / ${d.dept}<br>${d.role===\"рук\"?(\"Подчинённых: \"+d.nsub):\"специалист\"}`;\n    t.style.opacity=1;t.style.left=(e.pageX+12)+\"px\";t.style.top=(e.pageY-10)+\"px\";})\n  .on(\"mouseout\",()=>document.getElementById(\"tip\").style.opacity=0)\n  .call(d3.drag().on(\"start\",(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}).on(\"drag\",(e,d)=>{d.fx=e.x;d.fy=e.y;}).on(\"end\",(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));\nconst labels=g.append(\"g\").selectAll(\"text\").data(nodes).join(\"text\").attr(\"fill\",\"#a89d95\").attr(\"font-size\",\"9px\").attr(\"text-anchor\",\"middle\").attr(\"dy\",d=>-R(d)-3).attr(\"pointer-events\",\"none\").text(d=>d.label);\nlabels.style(\"opacity\",0);\nfunction refresh(){\n  if(!selected){node.attr(\"opacity\",1);labels.style(\"opacity\",labelsOn?1:0);link.attr(\"stroke-opacity\",.5).attr(\"stroke\",\"#3a342f\");return;}\n  const near=adj[selected];\n  node.attr(\"opacity\",d=>(d.id===selected||near.has(d.id))?1:.12);\n  labels.style(\"opacity\",d=>(d.id===selected||near.has(d.id))?1:0);\n  link.attr(\"stroke-opacity\",l=>(eid(l.source)===selected||eid(l.target)===selected)?.95:.05).attr(\"stroke\",l=>(eid(l.source)===selected||eid(l.target)===selected)?\"#f3724f\":\"#3a342f\");\n}\nconst sim=d3.forceSimulation(nodes).force(\"link\",d3.forceLink(links).id(d=>d.id).distance(48)).force(\"charge\",d3.forceManyBody().strength(-150)).force(\"center\",d3.forceCenter(CW()/2,CH()/2)).force(\"collision\",d3.forceCollide().radius(d=>R(d)+3))\n  .on(\"tick\",()=>{link.each(function(d){const s=d.source,t=d.target,dx=t.x-s.x,dy=t.y-s.y,dist=Math.hypot(dx,dy)||1,r=R(t);d3.select(this).attr(\"x1\",s.x).attr(\"y1\",s.y).attr(\"x2\",t.x-dx/dist*r).attr(\"y2\",t.y-dy/dist*r);});node.attr(\"cx\",d=>d.x).attr(\"cy\",d=>d.y);labels.attr(\"x\",d=>d.x).attr(\"y\",d=>d.y);});\nfunction rz(){svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity);}\nfunction tl(){labelsOn=!labelsOn;refresh();}\nlet po=true;function tp(){po=!po;po?sim.alpha(.3).restart():sim.stop();}\ntry{new ResizeObserver(()=>{if(CW()>1&&CH()>1){sim.force(\"center\",d3.forceCenter(CW()/2,CH()/2)).alpha(.25).restart();}}).observe(document.getElementById(\"viz\"));}catch(e){}\n\n</script></body></html>"
 
 
 # ───────────────────────── ДИАГНОСТИКА UI ─────────────────────────
@@ -1026,6 +1074,7 @@ def main():
     dark = bool(st.session_state.get("dark", False))
     theme.set_dark(dark)
     inject_theme(dark)
+    localize_widgets()
 
     base = os.path.dirname(os.path.abspath(__file__))
     st.markdown(f"""<div style="display:flex;align-items:center;gap:12px;padding:.3rem 0 .2rem">
@@ -1084,33 +1133,45 @@ def main():
             st.markdown('<div class="section-header">Рейтинг охвата</div>', unsafe_allow_html=True)
             if panels is not None:
                 with Debug.stage("render_rating", fatal=False): panels.render_rating(fd, emp)
-            with Debug.stage("render_leave", fatal=False): render_leave(tx, emp, closed_view=False)
+            with Debug.stage("render_leave", fatal=False): render_leave(tx, emp, closed_view=True)
 
         with t_net:
-            with Debug.stage("render_network_health", fatal=False): render_network_health(G, mt)
-            with Debug.stage("render_vertical", fatal=False): render_vertical(fd, emp)
-            with Debug.stage("render_curator", fatal=False): render_curator(fd, emp, CURATORS)
             st.markdown('<div class="section-header">Визуализация сети</div>', unsafe_allow_html=True)
             if components is not None and G is not None and G.number_of_nodes() > 0:
                 st.markdown('<div class="info-box">Стрелка показывает направление благодарности (толще к более '
                             'признаваемым узлам). <span style="color:#6b8e23">Оливковые связи — взаимные</span>. '
                             'Клик по узлу подсвечивает его связи; <strong>Ctrl+клик</strong> по нескольким узлам — '
                             'подсветка пути между ними. «Только взаимные» оставляет двусторонние.</div>', unsafe_allow_html=True)
-                gt = st.tabs(["Социальный граф", "Компании → отделы → люди"])
+                gt = st.tabs(["Социальный граф", "Компании → отделы → люди", "Оргструктура (рук/спец, матрица)"])
                 with gt[0]:
                     with Debug.stage("social_graph", fatal=False):
                         components.html(social_graph_html(G, mt), height=1040, scrolling=False)
                 with gt[1]:
                     with Debug.stage("hierarchy", fatal=False):
                         components.html(hierarchy_html(G, mt), height=1040, scrolling=False)
+                with gt[2]:
+                    with Debug.stage("org_graph", fatal=False):
+                        oh = org_graph_html(emp, CURATORS)
+                        if oh:
+                            st.markdown('<div class="info-box">Формальная структура подчинения: '
+                                        '<span style="color:#e95f3e">руководители</span> · '
+                                        '<span style="color:#6b8e23">специалисты</span>. Стрелка — «подчиняется»; '
+                                        'двойные рёбра — матричное (двойное) подчинение; размер узла — число подчинённых. '
+                                        'Клик по узлу — подсветить связи. Это формальная иерархия, отдельно от сети признания.</div>',
+                                        unsafe_allow_html=True)
+                            components.html(oh, height=1040, scrolling=False)
+                        else:
+                            st.info("Кураторские связи не разрешены (нет листа оргструктуры).")
             elif components is None:
                 st.warning("streamlit.components недоступен (см. диагностику).")
+            with Debug.stage("render_network_health", fatal=False): render_network_health(G, mt)
+            with Debug.stage("render_vertical", fatal=False): render_vertical(fd, emp)
+            with Debug.stage("render_curator", fatal=False): render_curator(fd, emp, CURATORS)
 
         with t_pass:
             st.markdown('<div class="section-header">Меритпаспорт сотрудника</div>', unsafe_allow_html=True)
             if panels is not None:
                 with Debug.stage("meritpassport", fatal=False): panels.render_meritpassport(fd, tx, emp)
-            with Debug.stage("leave_closed", fatal=False): render_leave(tx, emp, closed_view=True)
 
         with t_an:
             with Debug.stage("render_analyst", fatal=False): render_analyst(G, mt)
