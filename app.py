@@ -421,7 +421,7 @@ def sidebar_controls(tx, emp):
     except Exception:
         real_max = 500
     mr = st.sidebar.slider("Сила связи (мериты) — фильтр графа", 1, real_max, (1, real_max), 1,
-                           help="Скрыть слишком слабые или сильные связи в графе")
+                           help="Скрывает очень слабые или очень сильные связи, чтобы граф читался. Обычно трогать не нужно.")
     return dict(d_from=d_from, d_to=d_to, years=set(sel_years), months=set(sel_months), values=set(sel_vals),
                 companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps), side=side, merit_range=mr)
 
@@ -478,7 +478,7 @@ def render_funnel(f):
         ("Отправляют благодарности", f"{f['n_senders']:,}", f"{f['send_share']}% участников проявляют активную позицию"),
         ("Регулярно участвуют", f"{f['n_regular']:,}", "отправили больше одной благодарности"),
         ("Получают признание", f"{f['n_receivers']:,}", "хотя бы одна благодарность за период"),
-        ("Глубина — с комментарием", f"{f['comment_share']}%", "доля актов, где написан комментарий"),
+        ("Глубина — с комментарием", f"{f['comment_share']}%", "доля благодарностей с текстом — насколько признание развёрнуто"),
         ("Среднее признание на человека", f"{f['avg_recv']}", "мериты на получателя — см. распределение"),
     ]
     for c, (lab, val, sub) in zip(st.columns(6), cards):
@@ -574,12 +574,20 @@ def render_values(fd, emp):
                     unsafe_allow_html=True)
         if panels is not None:
             panels.render_value_people(fd, emp)
+    if len(fd) < 200:
+        st.caption("Выборка невелика — доли по отдельным ценностям могут заметно колебаться.")
 
 
 def render_grade_dynamics(tx, emp):
     st.markdown('<div class="section-header">Темпоральная динамика градовой структуры</div>', unsafe_allow_html=True)
     if go is None or grade_dynamics_figure is None:
         st.info("Модуль грейдов недоступен (см. диагностику)."); return
+    st.markdown('<div class="info-box"><strong>Грады</strong> — типы ценностей по Болтански–Тевено: за какой принцип '
+                'благодарят. Надёжность и функция (индустриальный), забота и поддержка (патриархальный), результат '
+                '(рыночный), общее дело (гражданский), идея и вдохновение, репутация и имя, проектная гибкость. '
+                'Графики показывают, как менялась доля этих типов по годам.<br>'
+                '<span class="muted">Сопоставление конкретных ценностей с типами — предварительное; читать как '
+                'гипотезу о языке признания, не как точную классификацию.</span></div>', unsafe_allow_html=True)
     comps = sorted(emp[EMP["company"]].dropna().unique().tolist())
     if not comps:
         return
@@ -618,8 +626,8 @@ def render_value_evolution(fd):
         st.markdown(f'<div class="card"><strong>Что поднялось и просело</strong> (с {years[0]} к {years[-1]}):<br>'
                     f'↑ <strong>{delta.index[-1]}</strong> (+{delta.iloc[-1]:.0f} пп) · '
                     f'↓ <strong>{delta.index[0]}</strong> ({delta.iloc[0]:.0f} пп).<br>'
-                    f'<span class="muted">25 исходных формулировок сведены к 17 каноническим ценностям '
-                    f'(3 поколения). Канон-реестр — на листе lineage_registry.</span></div>', unsafe_allow_html=True)
+                    f'<span class="muted">Формулировки ценностей менялись тремя волнами: 25 исходных названий сведены '
+                    f'к 17 устойчивым. Ниже — доли этих волн по годам.</span></div>', unsafe_allow_html=True)
         if "lineage_version" in fdt.columns:
             gen = fdt.groupby([fdt["dt"].dt.year.rename("y"), "lineage_version"]).size().reset_index(name="n")
             gt = gen.pivot(index="y", columns="lineage_version", values="n").fillna(0)
@@ -628,7 +636,7 @@ def render_value_evolution(fd):
             for i, g in enumerate([c for c in ["gen1", "gen2", "gen3"] if c in gs.columns]):
                 figg.add_trace(go.Bar(x=[str(y) for y in gs.index], y=gs[g].round(0).values, name=g,
                                       marker_color=["#cf8b22", "#6b8e23", "#e95f3e"][i % 3]))
-            light(figg, "Поколения формулировок по годам, %", 220)
+            light(figg, "Доли волн формулировок по годам, %", 220)
             figg.update_layout(barmode="stack", legend=dict(orientation="h", y=-0.3))
             st.plotly_chart(figg, use_container_width=True)
 
@@ -666,7 +674,7 @@ def render_tenure(fd, emp):
         if n_new >= 3 and rest_rate:
             ratio = new_rate / rest_rate if rest_rate else 0
             if ratio > 1.3:
-                msg, kl = f"Новички активнее остальных в ~{ratio:.1f}× — типичный «ритуал интеграции» (over-thank на старте).", "care"
+                msg, kl = f"Новички активнее остальных в ~{ratio:.1f}× — на старте часто благодарят чаще, это нормальное включение в практику.", "care"
             elif ratio < 0.7:
                 msg, kl = "Новички заметно менее активны — стоит посмотреть на онбординг в программу.", "care"
             else:
@@ -834,10 +842,10 @@ def render_vertical(fd, emp):
     tot = spsp + up + down + rr
     pct = lambda x: (x / tot * 100) if tot else 0
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Горизонталь спец↔спец", f"{pct(spsp):.0f}%", help=f"{spsp:,} актов")
-    c2.metric("Вверх: спец→рук", f"{pct(up):.0f}%", help=f"{up:,} актов")
-    c3.metric("Вниз: рук→спец", f"{pct(down):.0f}%", help=f"{down:,} актов")
-    c4.metric("Среди руковод. рук↔рук", f"{pct(rr):.0f}%", help=f"{rr:,} актов")
+    c1.metric("Горизонталь спец↔спец", f"{pct(spsp):.0f}%", help=f"специалисты благодарят специалистов · {spsp:,} актов")
+    c2.metric("Вверх: спец→рук", f"{pct(up):.0f}%", help=f"специалисты благодарят руководителей · {up:,} актов")
+    c3.metric("Вниз: рук→спец", f"{pct(down):.0f}%", help=f"руководители благодарят специалистов · {down:,} актов")
+    c4.metric("Среди руковод. рук↔рук", f"{pct(rr):.0f}%", help=f"руководители благодарят руководителей · {rr:,} актов")
 
     active = emp[emp[EMP["fire"]].isna()]
     nruk = max(int((active["Уровень"] == "рук").sum()), 1)
@@ -859,7 +867,7 @@ def render_vertical(fd, emp):
                                   y=[round(recv_ruk / nruk, 1), round(sent_ruk / nruk, 1)], marker_color="#e95f3e"))
             figb.add_trace(go.Bar(name="Специалисты", x=["получает на 1 чел", "отдаёт на 1 чел"],
                                   y=[round(recv_spec / nspec, 1), round(sent_spec / nspec, 1)], marker_color="#6b8e23"))
-            light(figb, "Признание на одного человека (нормировка на численность)", 260)
+            light(figb, "Признание на одного человека (делим на число людей уровня — чтобы сравнивать честно)", 260)
             figb.update_layout(barmode="group", legend=dict(orientation="h", y=-0.2))
             st.plotly_chart(figb, use_container_width=True)
     with g2:
@@ -949,6 +957,12 @@ def render_network_health(G, mt):
     if G is None or G.number_of_nodes() == 0:
         st.info("Граф пуст."); return
     n, e = G.number_of_nodes(), G.number_of_edges()
+    if n < 15:
+        st.markdown(f'<div class="card care"><strong>Выборка мала ({n} человек в сети).</strong> '
+                    f'Структурные метрики (взаимность, сообщества, незаменимые связки) на такой выборке '
+                    f'недостоверны и не рассчитываются.<br><span class="muted">Снимите фильтры или возьмите более '
+                    f'крупное подразделение/период, чтобы увидеть структуру сети.</span></div>', unsafe_allow_html=True)
+        return
     vals = sorted(mt.get("pagerank", {}).values(), reverse=True)
     top10 = sum(vals[:max(1, n // 10)]) / (sum(vals) or 1)
     rec = mt.get("reciprocity", 0); n_comm = len(set(mt.get("communities", {}).values()))
@@ -966,6 +980,8 @@ def render_network_health(G, mt):
         st.markdown(f'<div class="card care"><strong>Незаменимые связки.</strong> {n_cut} узлов соединяют части сети, '
                     f'которые иначе распались бы.<br><span class="muted">Структурная характеристика позиции, не оценка '
                     f'человека. Полезно, чтобы межотделовые связи держались не на одном человеке.</span></div>', unsafe_allow_html=True)
+    if n < 30:
+        st.caption("Сеть небольшая (меньше 30 человек) — деление на сообщества и «незаменимые связки» приблизительны.")
 
 
 def render_analyst(G, mt):
@@ -1113,8 +1129,17 @@ def main():
         n_comp = fd["s_" + EMP["company"]].nunique(); n_dep = fd["s_dept_key"].nunique()
         n_ppl = pd.Index(fd[TX["sid"]]).append(pd.Index(fd[TX["rid"]])).nunique()
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Транзакций", f"{len(fd):,}"); c2.metric("Меритов", f"{int(fd[TX['merits']].sum()):,}")
+        c1.metric("Транзакций", f"{len(fd):,}")
+        c2.metric("Меритов", f"{int(fd[TX['merits']].sum()):,}",
+                  help="суммарные голоса; потолок на один акт менялся 6→10 (01.09.2025) — сравнивать периоды осторожно")
         c3.metric("Компаний", f"{n_comp}"); c4.metric("Отделов", f"{n_dep}"); c5.metric("Сотрудников", f"{n_ppl:,}")
+
+        # Условное предупреждение об охвате — всплывает только при низком покрытии (универсально для разных компаний)
+        if TX["comment"] in fd.columns and len(fd):
+            cov = fd[TX["comment"]].notna().mean()
+            if cov < 0.30:
+                st.caption(f"⚠️ Комментарии заполнены лишь в {cov*100:.0f}% актов — выводы по тексту и «глубине» "
+                           f"ограничены: это голос пишущих, не всего коллектива.")
 
         with Debug.stage("build_graph"):
             G, _ = build_graph(fd, emp, cfg["merit_range"])
@@ -1141,7 +1166,8 @@ def main():
                 st.markdown('<div class="info-box">Стрелка показывает направление благодарности (толще к более '
                             'признаваемым узлам). <span style="color:#6b8e23">Оливковые связи — взаимные</span>. '
                             'Клик по узлу подсвечивает его связи; <strong>Ctrl+клик</strong> по нескольким узлам — '
-                            'подсветка пути между ними. «Только взаимные» оставляет двусторонние.</div>', unsafe_allow_html=True)
+                            'подсветка пути между ними. «Только взаимные» оставляет двусторонние.<br>'
+                            'Граф крупный — удобнее начать с фильтра по компании или отделу слева.</div>', unsafe_allow_html=True)
                 gt = st.tabs(["Социальный граф", "Компании → отделы → люди", "Оргструктура (рук/спец, матрица)"])
                 with gt[0]:
                     with Debug.stage("social_graph", fatal=False):

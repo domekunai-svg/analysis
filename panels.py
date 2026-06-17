@@ -99,15 +99,16 @@ def render_rating(fd, emp, N=20):
         s = s.sort_values(ascending=False).head(N)
         col = {"merits_in": "Получено голосов", "merits_out": "Отдано голосов",
                "reach_in": "От скольких получил", "reach_out": "Скольких поблагодарил"}[kind]
-        return pd.DataFrame([{"#": i, "ФИО": _fio(m, pid), "Должность": m[EMP["pos"]].get(pid, ""),
+        return pd.DataFrame([{"ФИО": _fio(m, pid), "Должность": m[EMP["pos"]].get(pid, ""),
                               "Отдел": m[EMP["dept"]].get(pid, ""), col: int(val)}
-                             for i, (pid, val) in enumerate(s.items(), 1)])
+                             for pid, val in s.items()])
 
     t1, t2, t3, t4 = st.tabs(["🏆 Получено голосов", "🚀 Отдано голосов",
                               "👥 Охват — от скольких получил", "📣 Охват — скольких поблагодарил"])
     for tab, kind in zip((t1, t2, t3, t4), ("merits_in", "merits_out", "reach_in", "reach_out")):
         with tab:
             st.dataframe(table(kind), use_container_width=True, hide_index=True)
+            st.caption("Это операционная витрина охвата признания, не оценка качества людей — платформа не ранжирует сотрудников.")
 
 
 # ─────────────────────────── МЕРИТПАСПОРТ ───────────────────────────
