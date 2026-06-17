@@ -294,6 +294,70 @@ def load_grade_map(path):
     return {}
 
 
+@st.cache_data(show_spinner=False)
+def resolve_curators(path):
+    try:
+        emp = pd.read_excel(path, sheet_name="2_employees_clean", header=1)
+        org = pd.read_excel(path, sheet_name="5_org_structure", header=1)
+    except Exception:
+        return dict(cur_to_subs={}, sub_to_curs={}, n_links=0, n_matrix=0, n_resolved=0)
+
+    def nrm(s):
+        return " ".join(str(s).strip().lower().replace("ё", "е").split())
+    fc, ff, fi, fo = _col(emp, "person_id"), _col(emp, "фамилия"), _col(emp, "имя"), _col(emp, "отчество")
+    idx = {}
+    for _, r in emp.iterrows():
+        idx.setdefault(nrm(r[ff]), []).append((str(r[fc]).strip(),
+            nrm(r[fi]) if pd.notna(r[fi]) else "", nrm(r[fo]) if pd.notna(r[fo]) else ""))
+
+    def split_c(raw):
+        s = str(raw)
+        for sep in (";", ",", "/"):
+            s = s.replace(sep, "|")
+        s = s.replace(" и ", "|")
+        return [p.strip() for p in s.split("|") if p.strip()]
+
+    def match(tok):
+        parts = tok.split()
+        if len(parts) < 2:
+            return []
+        fam = nrm(parts[0])
+        inits = []
+        for w in parts[1:]:
+            if "." in w:
+                inits += [ch.lower() for ch in w if ch.isalpha()]
+            elif w[:1].isalpha():
+                inits.append(w[0].lower())
+        if not inits:
+            return []
+        i1 = inits[0]; i2 = inits[1] if len(inits) > 1 else ""
+        return [pid for pid, im, ot in idx.get(fam, []) if im[:1] == i1 and (not i2 or not ot or ot[:1] == i2)]
+
+    pc, cc = _col(org, "person_id"), _col(org, "curator_raw")
+    cur_to_subs, sub_to_curs, n_links, n_matrix, n_res = {}, {}, 0, 0, 0
+    for _, r in org.iterrows():
+        raw = r[cc]
+        if pd.isna(raw):
+            continue
+        n_links += 1
+        toks = split_c(raw)
+        if len(toks) > 1:
+            n_matrix += 1
+        resolved = []
+        for t in toks:
+            mm = match(t)
+            if len(mm) == 1:
+                resolved.append(mm[0])
+        if resolved:
+            n_res += 1
+            sub = str(r[pc]).strip()
+            sub_to_curs[sub] = resolved
+            for c in resolved:
+                cur_to_subs.setdefault(c, set()).add(sub)
+    return dict(cur_to_subs={k: list(v) for k, v in cur_to_subs.items()}, sub_to_curs=sub_to_curs,
+                n_links=n_links, n_matrix=n_matrix, n_resolved=n_res)
+
+
 def merge_data(tx, emp):
     m = emp.set_index(EMP["id"]); m = m[~m.index.duplicated(keep="first")]
     cols = ["full_name", EMP["pos"], EMP["company"], EMP["dept"], "dept_key", "Уровень"]
@@ -797,6 +861,63 @@ def render_vertical(fd, emp):
     st.caption("Уровень рук/спец — из HR-справочника (заполнен на 100%). Кураторское дерево (кто чей руководитель) — Этап 4.")
 
 
+def render_curator(fd, emp, cur):
+    st.markdown('<div class="section-header">Кураторская вертикаль · руководитель и подчинённые</div>', unsafe_allow_html=True)
+    cts = cur.get("cur_to_subs", {}) if cur else {}
+    if not cts:
+        st.info("Кураторские связи не разрешены (нет листа оргструктуры)."); return
+    active = set(emp[emp[EMP["fire"]].isna()][EMP["id"]])
+    out_t = fd.groupby(TX["sid"])[TX["rid"]].apply(set)
+    in_s = fd.groupby(TX["rid"])[TX["sid"]].apply(set)
+    mgrs = [(c, set(s) & active) for c, s in cts.items() if c in active]
+    mgrs = [(c, s) for c, s in mgrs if s]
+    if not mgrs:
+        st.info("Нет руководителей с активными подчинёнными в выборке."); return
+    dri_list, up_list, mc_list, no_recog, no_up = [], [], [], 0, 0
+    for c, subs in mgrs:
+        sent, recv = out_t.get(c, set()), in_s.get(c, set())
+        dri = len(subs & sent) / len(subs)
+        up = len(subs & recv) / len(subs)
+        dri_list.append(dri); up_list.append(up)
+        if dri == 0: no_recog += 1
+        if up == 0: no_up += 1
+        group = subs | {c}
+        gi = fd[fd[TX["sid"]].isin(group) & fd[TX["rid"]].isin(group)]
+        if len(gi):
+            mc_list.append(float(((gi[TX["sid"]] == c) | (gi[TX["rid"]] == c)).mean()))
+    n_m = len(mgrs)
+    a, b, c4, d = st.columns(4)
+    a.metric("Руководителей (привязано)", f"{n_m}")
+    b.metric("Признают подчинённых", f"{np.mean(dri_list)*100:.0f}%", help="DRI: средняя доля подчинённых, которых руководитель поблагодарил хотя бы раз")
+    c4.metric("Признаны подчинёнными", f"{np.mean(up_list)*100:.0f}%", help="средняя доля подчинённых, признавших своего руководителя")
+    d.metric("Руковод.-центричность", f"{np.mean(mc_list)*100:.0f}%" if mc_list else "—", help="MC: доля внутригрупповых актов с участием руководителя")
+
+    buckets = {"0% (никого)": 0, "<50%": 0, "50–99%": 0, "100% (всех)": 0}
+    for v in dri_list:
+        if v == 0: buckets["0% (никого)"] += 1
+        elif v < 0.5: buckets["<50%"] += 1
+        elif v < 1: buckets["50–99%"] += 1
+        else: buckets["100% (всех)"] += 1
+    g1, g2 = st.columns([3, 2], vertical_alignment="center")
+    with g1:
+        if go is not None:
+            fig = go.Figure(go.Bar(x=list(buckets.keys()), y=list(buckets.values()), marker_color=CORAL))
+            light(fig, "Сколько руководителей какой доле подчинённых дали признание (DRI)", 300)
+            st.plotly_chart(fig, use_container_width=True)
+    with g2:
+        st.markdown(f'<div class="card care"><strong>Руководители без признания подчинённых.</strong> '
+                    f'{no_recog} из {n_m} руководителей за период не поблагодарили ни одного своего подчинённого.<br>'
+                    f'<span class="muted">Сигнал внимания, не оценка: возможны причины (стиль управления, '
+                    f'дистанционная роль, признание вне платформы). Читать через парную процедуру.</span></div>',
+                    unsafe_allow_html=True)
+        st.markdown(f'<div class="card"><strong>Руководители без признания снизу.</strong> '
+                    f'{no_up} из {n_m} не получили ни одной благодарности от своих подчинённых за период.</div>',
+                    unsafe_allow_html=True)
+    st.caption(f"Кураторы привязаны автоматически: {cur.get('n_resolved',0)} из {cur.get('n_links',0)} связей "
+               f"(матричных, с двойным куратором — {cur.get('n_matrix',0)}). Непривязанные — вне расчёта; "
+               f"метрики читать с поправкой на покрытие.")
+
+
 def render_network_health(G, mt):
     st.markdown('<div class="section-header">Сеть признания</div>', unsafe_allow_html=True)
     if G is None or G.number_of_nodes() == 0:
@@ -929,6 +1050,7 @@ def main():
             with Debug.stage("load_limits"): LIMITS = load_limits(data_path)
             with Debug.stage("merge_data"): tx = merge_data(tx_raw.copy(), emp)
             if set_grade_map: set_grade_map(load_grade_map(data_path))
+            with Debug.stage("resolve_curators"): CURATORS = resolve_curators(data_path)
             Debug.info["employees"] = len(emp); Debug.info["transactions"] = len(tx)
             try: Debug.info["период"] = f"{tx['dt'].min():%Y-%m} … {tx['dt'].max():%Y-%m}"
             except Exception: pass
@@ -967,6 +1089,7 @@ def main():
         with t_net:
             with Debug.stage("render_network_health", fatal=False): render_network_health(G, mt)
             with Debug.stage("render_vertical", fatal=False): render_vertical(fd, emp)
+            with Debug.stage("render_curator", fatal=False): render_curator(fd, emp, CURATORS)
             st.markdown('<div class="section-header">Визуализация сети</div>', unsafe_allow_html=True)
             if components is not None and G is not None and G.number_of_nodes() > 0:
                 st.markdown('<div class="info-box">Стрелка показывает направление благодарности (толще к более '
