@@ -85,9 +85,9 @@ try:
 except Exception:
     panels = None; _IMPORT_ERR["panels"] = traceback.format_exc()
 try:
-    from grades import grade_dynamics_figure
+    from grades import grade_dynamics_figure, set_grade_map
 except Exception:
-    grade_dynamics_figure = None; _IMPORT_ERR["grades"] = traceback.format_exc()
+    grade_dynamics_figure = set_grade_map = None; _IMPORT_ERR["grades"] = traceback.format_exc()
 
 Debug.info = {"python": platform.python_version(), "pandas": pd.__version__, "numpy": np.__version__,
               "networkx": getattr(nx, "__version__", "—"), "streamlit": getattr(st, "__version__", "—"),
@@ -279,6 +279,19 @@ def load_limits(path):
         return breaks
     except Exception:
         return []
+
+
+@st.cache_data(show_spinner=False)
+def load_grade_map(path):
+    try:
+        r = pd.read_excel(path, sheet_name="3_lineage_registry", header=1)
+        nc, gc = _col(r, "каноническая"), _col(r, "grade_primary")
+        if nc and gc:
+            return {str(k).strip(): str(v).strip() for k, v in zip(r[nc], r[gc])
+                    if pd.notna(v) and str(v).strip() and str(v).strip().lower() != "nan"}
+    except Exception:
+        pass
+    return {}
 
 
 def merge_data(tx, emp):
@@ -498,6 +511,97 @@ def render_grade_dynamics(tx, emp):
     unit = st.selectbox("Подразделение", comps, index=comps.index(default))
     fig = grade_dynamics_figure(go, make_subplots, tx, EMP["company"], unit)
     st.plotly_chart(fig, use_container_width=True)
+
+
+def render_value_evolution(fd):
+    st.markdown('<div class="section-header">Эволюция ценностей</div>', unsafe_allow_html=True)
+    if go is None:
+        return
+    fdt = fd.dropna(subset=["dt"])
+    if len(fdt) < 2:
+        st.info("Недостаточно данных."); return
+    vy = fdt.groupby([fdt["dt"].dt.year.rename("y"), TX["value"]]).size().reset_index(name="n")
+    tab = vy.pivot(index="y", columns=TX["value"], values="n").fillna(0)
+    share = tab.div(tab.sum(axis=1), axis=0) * 100
+    years = sorted(share.index)
+    if len(years) < 2:
+        st.info("Нужно ≥2 года для динамики."); return
+    topv = share.loc[years[-1]].sort_values(ascending=False).head(7).index.tolist()
+    WARM = ["#e95f3e", "#5e7d16", "#c9871f", "#c0492f", "#8a9a3f", "#b5743a", "#6b8e23"]
+    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+    with c1:
+        fig = go.Figure()
+        for i, v in enumerate(topv):
+            fig.add_trace(go.Scatter(x=[str(y) for y in years], y=[round(share.loc[y, v], 1) for y in years],
+                                     name=v[:24], mode="lines+markers", line=dict(color=WARM[i % len(WARM)], width=2)))
+        light(fig, "Доля ведущих ценностей по годам, %", 340)
+        fig.update_layout(legend=dict(orientation="h", y=-0.28, font=dict(size=10)))
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        delta = (share.loc[years[-1]] - share.loc[years[0]]).sort_values()
+        st.markdown(f'<div class="card"><strong>Что поднялось и просело</strong> (с {years[0]} к {years[-1]}):<br>'
+                    f'↑ <strong>{delta.index[-1]}</strong> (+{delta.iloc[-1]:.0f} пп) · '
+                    f'↓ <strong>{delta.index[0]}</strong> ({delta.iloc[0]:.0f} пп).<br>'
+                    f'<span class="muted">25 исходных формулировок сведены к 17 каноническим ценностям '
+                    f'(3 поколения). Канон-реестр — на листе lineage_registry.</span></div>', unsafe_allow_html=True)
+        if "lineage_version" in fdt.columns:
+            gen = fdt.groupby([fdt["dt"].dt.year.rename("y"), "lineage_version"]).size().reset_index(name="n")
+            gt = gen.pivot(index="y", columns="lineage_version", values="n").fillna(0)
+            gs = gt.div(gt.sum(axis=1), axis=0) * 100
+            figg = go.Figure()
+            for i, g in enumerate([c for c in ["gen1", "gen2", "gen3"] if c in gs.columns]):
+                figg.add_trace(go.Bar(x=[str(y) for y in gs.index], y=gs[g].round(0).values, name=g,
+                                      marker_color=["#cf8b22", "#6b8e23", "#e95f3e"][i % 3]))
+            light(figg, "Поколения формулировок по годам, %", 220)
+            figg.update_layout(barmode="stack", legend=dict(orientation="h", y=-0.3))
+            st.plotly_chart(figg, use_container_width=True)
+
+
+def render_tenure(fd, emp):
+    st.markdown('<div class="section-header">Стаж и онбординг</div>', unsafe_allow_html=True)
+    if "Дата_найма" not in emp.columns:
+        st.info("Нет даты найма в данных."); return
+    e = emp[emp[EMP["fire"]].isna()].copy().dropna(subset=["Дата_найма"])
+    if len(e) == 0:
+        st.info("Нет дат найма у активных."); return
+    ref = fd["dt"].max() if ("dt" in fd.columns and fd["dt"].notna().any()) else pd.Timestamp.now()
+    e["ten"] = (ref - e["Дата_найма"]).dt.days / 365.25
+    labels = ["<6 мес", "6–12 мес", "1–2 года", "2–3 года", "3–5 лет", "5+ лет"]
+    e["coh"] = pd.cut(e["ten"], [-1, 0.5, 1, 2, 3, 5, 100], labels=labels)
+    sent = fd.groupby(TX["sid"]).agg(n=("dt", "size"), mo=("ym", "nunique"))
+    sent["rate"] = sent["n"] / sent["mo"].clip(lower=1)
+    e = e.set_index(EMP["id"]); e["rate"] = sent["rate"].reindex(e.index).fillna(0)
+    n_active = max(int(emp[EMP["fire"]].isna().sum()), 1)
+    a, b, cc = st.columns(3)
+    a.metric("Медианный стаж", f"{e['ten'].median():.1f} лет")
+    b.metric("Новичков (<6 мес)", f"{int((e['coh'] == '<6 мес').sum())}")
+    cc.metric("Известен стаж", f"{len(e)/n_active*100:.0f}% активных")
+    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+    with c1:
+        if go is not None:
+            cr = e.groupby("coh", observed=False)["rate"].mean().reindex(labels)
+            fig = go.Figure(go.Bar(x=labels, y=cr.round(2).fillna(0).values, marker_color=CORAL))
+            light(fig, "Средняя активность (актов/мес на человека) по стажу", 300)
+            st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        new_rate = e[e["coh"] == "<6 мес"]["rate"].mean()
+        rest_rate = e[e["coh"] != "<6 мес"]["rate"].mean()
+        n_new = int((e["coh"] == "<6 мес").sum())
+        if n_new >= 3 and rest_rate:
+            ratio = new_rate / rest_rate if rest_rate else 0
+            if ratio > 1.3:
+                msg, kl = f"Новички активнее остальных в ~{ratio:.1f}× — типичный «ритуал интеграции» (over-thank на старте).", "care"
+            elif ratio < 0.7:
+                msg, kl = "Новички заметно менее активны — стоит посмотреть на онбординг в программу.", "care"
+            else:
+                msg, kl = "Активность новичков близка к остальным — ровное включение.", "good"
+            st.markdown(f'<div class="card {kl}"><strong>Онбординг.</strong> {n_new} новичков (&lt;6 мес): '
+                        f'{new_rate:.1f} актов/мес против {rest_rate:.1f} у остальных. {msg}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="card"><strong>Онбординг.</strong> Новичков (&lt;6 мес) сейчас мало ({n_new}) — '
+                        f'для устойчивого вывода нужна большая когорта.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="info-box">Дата найма известна не у всех — см. покрытие выше. '
+                    'Полноценные ALP-фазы жизненного цикла участия — следующий шаг на этих данных.</div>', unsafe_allow_html=True)
 
 
 # ───────────────────────── СИГНАЛЫ ВНИМАНИЯ (помесячно) ─────────────────────────
@@ -824,6 +928,7 @@ def main():
             with Debug.stage("load_transactions"): tx_raw = load_transactions(data_path)
             with Debug.stage("load_limits"): LIMITS = load_limits(data_path)
             with Debug.stage("merge_data"): tx = merge_data(tx_raw.copy(), emp)
+            if set_grade_map: set_grade_map(load_grade_map(data_path))
             Debug.info["employees"] = len(emp); Debug.info["transactions"] = len(tx)
             try: Debug.info["период"] = f"{tx['dt'].min():%Y-%m} … {tx['dt'].max():%Y-%m}"
             except Exception: pass
@@ -851,7 +956,9 @@ def main():
             with Debug.stage("render_funnel", fatal=False): render_funnel(compute_funnel(emp, fd))
             with Debug.stage("render_temporal", fatal=False): render_temporal(fd, emp, LIMITS)
             with Debug.stage("render_values", fatal=False): render_values(fd, emp)
+            with Debug.stage("render_value_evolution", fatal=False): render_value_evolution(fd)
             with Debug.stage("render_grade_dynamics", fatal=False): render_grade_dynamics(tx, emp)
+            with Debug.stage("render_tenure", fatal=False): render_tenure(fd, emp)
             st.markdown('<div class="section-header">Рейтинг охвата</div>', unsafe_allow_html=True)
             if panels is not None:
                 with Debug.stage("render_rating", fatal=False): panels.render_rating(fd, emp)

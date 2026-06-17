@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Маппинг ценностей Термекса → грады Болтански–Тевено и темпоральная динамика
-градовой структуры. Маппинг ПРОВИЗОРНЫЙ (демо до лингвистической валидации) —
-правится в одном месте: словарь GRADE_MAP ниже. Тёплая палитра, тема — theme.py.
+Грады Болтански–Тевено и темпоральная динамика градовой структуры.
+ДОМ МАППИНГА — лист 3_lineage_registry, колонка grade_primary (читается приложением и
+передаётся сюда через set_grade_map). GRADE_MAP ниже — запасной/демо-словарь.
+Тёплая палитра, тема — theme.py.
 """
 import re
 import pandas as pd
@@ -16,6 +17,7 @@ GRADE_COLORS = {
     "Проектный": "#c9871f",
 }
 
+# запасной словарь (если в реестре grade_primary пуст). Ключи нормализованы при чтении.
 GRADE_MAP = {
     "командная работа": "Проектный",
     "надежное плечо": "Патриархальный",
@@ -36,6 +38,13 @@ GRADE_MAP = {
 
 def _norm(v):
     return re.sub(r"\s+", " ", str(v).strip().lower().replace("ё", "е"))
+
+
+def set_grade_map(mapping):
+    """Влить маппинг из реестра (имя ценности → град). Перетирает запасной словарь."""
+    for k, v in (mapping or {}).items():
+        if v and str(v).strip() and str(v).strip().lower() != "nan":
+            GRADE_MAP[_norm(k)] = str(v).strip()
 
 
 def grade_of(value):
@@ -86,7 +95,6 @@ def grade_dynamics_figure(go, make_subplots, tx, unit_col, unit_value):
                                      mode="lines+markers", line=dict(color=GRADE_COLORS[g], width=2),
                                      marker=dict(size=6), legendgroup=g, showlegend=(i == 1)),
                           row=1, col=i)
-    # заголовок графика убран (он есть в шапке секции) — чтобы тексты не наслаивались
     fig.update_layout(template="plotly_white", height=430, paper_bgcolor="rgba(0,0,0,0)",
                       plot_bgcolor="rgba(0,0,0,0)", font=dict(color=theme.INK, family="Golos Text, sans-serif"),
                       margin=dict(l=46, r=10, t=64, b=10), legend=dict(orientation="h", y=-0.14))
