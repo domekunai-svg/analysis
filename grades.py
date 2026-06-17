@@ -7,7 +7,6 @@
 import re
 import pandas as pd
 
-# Порядок и цвета градов (как в эталонном примере)
 GRADE_ORDER = ["Индустриальный", "Рыночный", "Гражданский", "Патриархальный",
                "Вдохновения", "Репутации", "Проектный"]
 GRADE_COLORS = {
@@ -43,56 +42,49 @@ def grade_of(value):
     key = _norm(value)
     if key in GRADE_MAP:
         return GRADE_MAP[key]
-    for k, g in GRADE_MAP.items():           # запасной поиск по началу строки
+    for k, g in GRADE_MAP.items():
         if key.startswith(k[:12]):
             return g
     return None
 
 
-def attach_grade(df, value_col="Ценность"):
-    out = df.copy()
-    out["__grade"] = out[value_col].map(grade_of)
-    return out
-
-
 def grade_share_by_year(acts, value_col="Ценность", date_col="dt"):
-    """Доля каждого града по годам (в %). acts — подвыборка актов."""
     a = acts.dropna(subset=[date_col]).copy()
     a["__grade"] = a[value_col].map(grade_of)
     a = a[a["__grade"].notna()]
     a["__year"] = a[date_col].dt.year
     if len(a) == 0:
-        return pd.DataFrame(), {}
+        return pd.DataFrame()
     pivot = a.groupby(["__year", "__grade"]).size().unstack(fill_value=0)
     share = pivot.div(pivot.sum(axis=1), axis=0) * 100
-    counts = a.groupby("__year").size().to_dict()
     for g in GRADE_ORDER:
         if g not in share.columns:
             share[g] = 0.0
-    return share[GRADE_ORDER], counts
+    return share[GRADE_ORDER]
 
 
 def grade_dynamics_figure(go, make_subplots, tx, unit_col, unit_value):
-    """3 панели: Я-концепция (исходящие), Персона (входящие), Внутренние (внутри юнита)."""
-    s_col = "s_" + unit_col if unit_col != "dept_key" else "s_dept_key"
-    r_col = "r_" + unit_col if unit_col != "dept_key" else "r_dept_key"
-    out_acts = tx[tx[s_col] == unit_value]                                   # что благодарят сотрудники юнита
-    in_acts = tx[tx[r_col] == unit_value]                                    # за что благодарят сотрудников юнита
-    within = tx[(tx[s_col] == unit_value) & (tx[r_col] == unit_value)]       # внутри юнита
-
-    panels = [("Я-концепция", "что и за что благодарят сотрудники", out_acts),
-              ("Персона", "за что благодарят сотрудников", in_acts),
-              ("Внутренние", "как благодарят друг друга", within)]
-    fig = make_subplots(rows=1, cols=3, subplot_titles=[f"{t}<br><sub>{s}</sub>" for t, s, _ in panels],
-                        shared_yaxes=True)
+    """4 панели: Исходящие, Входящие, Внутренние, Внешние."""
+    s_col = "s_" + unit_col
+    r_col = "r_" + unit_col
+    in_unit_s = tx[s_col] == unit_value
+    in_unit_r = tx[r_col] == unit_value
+    panels = [
+        ("Исходящие", "за что благодарят сотрудники подразделения", tx[in_unit_s]),
+        ("Входящие", "за что благодарят сотрудников подразделения", tx[in_unit_r]),
+        ("Внутренние", "признание внутри подразделения", tx[in_unit_s & in_unit_r]),
+        ("Внешние", "признание с другими подразделениями", tx[in_unit_s ^ in_unit_r]),
+    ]
+    fig = make_subplots(rows=1, cols=4, shared_yaxes=True,
+                        subplot_titles=[f"{t}<br><sub>{s}</sub>" for t, s, _ in panels])
     for i, (_, _, acts) in enumerate(panels, start=1):
-        share, counts = grade_share_by_year(acts)
+        share = grade_share_by_year(acts)
         if len(share) == 0:
             continue
         for g in GRADE_ORDER:
             fig.add_trace(go.Scatter(x=share.index.astype(str), y=share[g], name=g,
                                      mode="lines+markers", line=dict(color=GRADE_COLORS[g], width=2),
-                                     marker=dict(size=7), legendgroup=g, showlegend=(i == 1)),
+                                     marker=dict(size=6), legendgroup=g, showlegend=(i == 1)),
                           row=1, col=i)
     fig.update_layout(template="plotly_dark", height=420, paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
                       margin=dict(l=10, r=10, t=70, b=10), legend=dict(orientation="h", y=-0.12),

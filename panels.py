@@ -28,9 +28,7 @@ def _fio(m, pid):
     return str(pid)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ДНЕВНОЙ ПУЛЬС с ФИО в подсказке
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────── ДНЕВНОЙ ПУЛЬС с ФИО в подсказке ───────────────────────────
 def daily_pulse_fig(fd, emp):
     if go is None:
         return None
@@ -38,7 +36,6 @@ def daily_pulse_fig(fd, emp):
     a = fd.dropna(subset=["dt"]).copy()
     a["d"] = a["dt"].dt.normalize()
     daily = a.groupby("d").agg(acts=(TX["merits"], "size")).reset_index()
-    # топ-благодарящие за день — в подсказку
     names_by_day = {}
     for d, sub in a.groupby("d"):
         top = sub.groupby(TX["sid"]).size().sort_values(ascending=False).head(6)
@@ -57,9 +54,7 @@ def daily_pulse_fig(fd, emp):
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ЦЕННОСТЬ → КТО ЕЁ СФОРМИРОВАЛ (ФИО)
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────── ЦЕННОСТЬ → КТО ЕЁ СФОРМИРОВАЛ ───────────────────────────
 def render_value_people(fd, emp):
     vals = sorted(fd[TX["value"]].dropna().unique().tolist())
     if not vals:
@@ -76,24 +71,22 @@ def render_value_people(fd, emp):
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  РЕЙТИНГ ОХВАТА (мериты + число сотрудников)
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────── РЕЙТИНГ ОХВАТА ───────────────────────────
 def render_rating(fd, emp, N=20):
     m = _emap(emp)
 
-    def table(group_col, agg_kind):
-        if agg_kind == "merits_in":
+    def table(kind):
+        if kind == "merits_in":
             s = fd.groupby(TX["rid"])[TX["merits"]].sum()
-        elif agg_kind == "merits_out":
+        elif kind == "merits_out":
             s = fd.groupby(TX["sid"])[TX["merits"]].sum()
-        elif agg_kind == "reach_in":
+        elif kind == "reach_in":
             s = fd.groupby(TX["rid"])[TX["sid"]].nunique()
         else:
             s = fd.groupby(TX["sid"])[TX["rid"]].nunique()
         s = s.sort_values(ascending=False).head(N)
         col = {"merits_in": "Получено голосов", "merits_out": "Отдано голосов",
-               "reach_in": "От скольких получил", "reach_out": "Скольких поблагодарил"}[agg_kind]
+               "reach_in": "От скольких получил", "reach_out": "Скольких поблагодарил"}[kind]
         return pd.DataFrame([{"#": i, "ФИО": _fio(m, pid), "Должность": m[EMP["pos"]].get(pid, ""),
                               "Отдел": m[EMP["dept"]].get(pid, ""), col: int(val)}
                              for i, (pid, val) in enumerate(s.items(), 1)])
@@ -102,12 +95,10 @@ def render_rating(fd, emp, N=20):
                               "👥 Охват — от скольких получил", "📣 Охват — скольких поблагодарил"])
     for tab, kind in zip((t1, t2, t3, t4), ("merits_in", "merits_out", "reach_in", "reach_out")):
         with tab:
-            st.dataframe(table(None, kind), use_container_width=True, hide_index=True)
+            st.dataframe(table(kind), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  МЕРИТПАСПОРТ
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────── МЕРИТПАСПОРТ ───────────────────────────
 def _donut(title, series):
     fig = go.Figure(go.Pie(labels=series.index.tolist(), values=series.values.tolist(), hole=0.55,
                            textinfo="percent", insidetextorientation="radial"))
@@ -124,7 +115,6 @@ def render_meritpassport(fd, tx_all, emp):
         return
     row = emp[emp["full_name"] == who].iloc[0]
     pid = row[EMP["id"]]
-    # заголовок: должность и отдел читаются чётко
     st.markdown(f'<div class="card"><span style="font-size:1.15rem"><strong>{who}</strong></span><br>'
                 f'<span style="color:#c9d1d9">{row.get(EMP["pos"],"")}</span> · '
                 f'{row.get(EMP["company"],"")} / {row.get(EMP["dept"],"")}</div>', unsafe_allow_html=True)
@@ -132,8 +122,6 @@ def render_meritpassport(fd, tx_all, emp):
     sent = fd[fd[TX["sid"]] == pid]
     recv = fd[fd[TX["rid"]] == pid]
     reach_in = recv[TX["sid"]].nunique()
-    depts_in = recv[recv[TX["sid"]].isin(emp[EMP["id"]])].copy()
-    n_dep_in = depts_in.merge(emp[[EMP["id"], EMP["dept"]]], left_on=TX["sid"], right_on=EMP["id"], how="left")[EMP["dept"]].nunique()
     bal = ("сбалансированный" if abs(len(sent) - len(recv)) <= max(3, 0.3 * max(len(sent), len(recv), 1))
            else "преимущественно отдающий" if len(sent) > len(recv) else "преимущественно получающий")
     c1, c2, c3, c4 = st.columns(4)
@@ -154,7 +142,6 @@ def render_meritpassport(fd, tx_all, emp):
                                    sent.groupby(TX["value"])[TX["merits"]].sum().sort_values(ascending=False)),
                             use_container_width=True)
 
-    # личная динамика по месяцам
     if go is not None and (len(recv) or len(sent)):
         rin = recv.dropna(subset=["dt"]).groupby("ym").size()
         rout = sent.dropna(subset=["dt"]).groupby("ym").size()
@@ -174,14 +161,26 @@ def render_meritpassport(fd, tx_all, emp):
     with cc1:
         st.markdown("**Полученные комментарии**")
         rc = recv[recv[TX["comment"]].notna()].copy()
-        rc["От кого"] = rc[TX["sid"]].map(lambda p: _fio(m, p))
-        show = rc[["От кого", TX["value"], TX["comment"]]].rename(columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"}).tail(15)
-        st.dataframe(show, use_container_width=True, hide_index=True) if len(show) else st.caption("Пока нет комментариев.")
+        if len(rc):
+            rc = rc.sort_values("dt", ascending=False) if "dt" in rc.columns else rc
+            rc["От кого"] = rc[TX["sid"]].map(lambda p: _fio(m, p))
+            show = rc[["От кого", TX["value"], TX["comment"]]].rename(
+                columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"})
+            st.caption(f"Всего: {len(show)}")
+            st.dataframe(show, use_container_width=True, hide_index=True, height=320)
+        else:
+            st.caption("Пока нет полученных комментариев.")
     with cc2:
         st.markdown("**Отправленные комментарии**")
         sc = sent[sent[TX["comment"]].notna()].copy()
-        sc["Кому"] = sc[TX["rid"]].map(lambda p: _fio(m, p))
-        show = sc[["Кому", TX["value"], TX["comment"]]].rename(columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"}).tail(15)
-        st.dataframe(show, use_container_width=True, hide_index=True) if len(show) else st.caption("Пока нет комментариев.")
+        if len(sc):
+            sc = sc.sort_values("dt", ascending=False) if "dt" in sc.columns else sc
+            sc["Кому"] = sc[TX["rid"]].map(lambda p: _fio(m, p))
+            show = sc[["Кому", TX["value"], TX["comment"]]].rename(
+                columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"})
+            st.caption(f"Всего: {len(show)}")
+            st.dataframe(show, use_container_width=True, hide_index=True, height=320)
+        else:
+            st.caption("Пока нет отправленных комментариев.")
 
     st.caption("Меритпаспорт — зеркало участия в признании, не оценка. Характеристики описывают позицию в этот период.")
