@@ -426,7 +426,7 @@ def render_leave(tx_all, emp, closed_view):
         fig.update_layout(template="plotly_dark", height=240, margin=dict(l=10, r=10, t=44, b=10),
                           paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
                           title="Сколько участников в каждом месяце снизили активность вдвое+ относительно своих 3 предыдущих месяцев")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"leave_chart_{closed_view}")
     n_now = len(lv["rows"])
     st.markdown(
         f'<div class="card care"><strong>Сигнал внимания, не прогноз ухода.</strong><br>'
