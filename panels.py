@@ -83,32 +83,47 @@ def render_value_people(fd, emp):
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────── РЕЙТИНГ ОХВАТА ───────────────────────────
+# ─────────────────────────── РЕЙТИНГИ (клик → кто за этим стоит) ───────────────────────────
 def render_rating(fd, emp, N=20):
     m = _emap(emp)
-
-    def table(kind):
-        if kind == "merits_in":
-            s = fd.groupby(TX["rid"])[TX["merits"]].sum()
-        elif kind == "merits_out":
-            s = fd.groupby(TX["sid"])[TX["merits"]].sum()
-        elif kind == "reach_in":
-            s = fd.groupby(TX["rid"])[TX["sid"]].nunique()
-        else:
-            s = fd.groupby(TX["sid"])[TX["rid"]].nunique()
-        s = s.sort_values(ascending=False).head(N)
-        col = {"merits_in": "Получено голосов", "merits_out": "Отдано голосов",
-               "reach_in": "От скольких получил", "reach_out": "Скольких поблагодарил"}[kind]
-        return pd.DataFrame([{"ФИО": _fio(m, pid), "Должность": m[EMP["pos"]].get(pid, ""),
-                              "Отдел": m[EMP["dept"]].get(pid, ""), col: int(val)}
-                             for pid, val in s.items()])
-
-    t1, t2, t3, t4 = st.tabs(["🏆 Получено голосов", "🚀 Отдано голосов",
-                              "👥 Охват — от скольких получил", "📣 Охват — скольких поблагодарил"])
-    for tab, kind in zip((t1, t2, t3, t4), ("merits_in", "merits_out", "reach_in", "reach_out")):
+    # kind: вкладка, ключевая колонка (по кому считаем), колонка партнёра, режим, подпись значения, подпись партнёров
+    specs = [
+        ("merits_in",  "🏆 Получено голосов",     TX["rid"], TX["sid"], "merits", "Получено голосов",     "Кто благодарил"),
+        ("merits_out", "🚀 Отдано голосов",        TX["sid"], TX["rid"], "merits", "Отдано голосов",       "Кого благодарил"),
+        ("reach_in",   "👥 От скольких получил",   TX["rid"], TX["sid"], "reach",  "От скольких получил",   "Кто благодарил"),
+        ("reach_out",  "📣 Скольких поблагодарил", TX["sid"], TX["rid"], "reach",  "Скольких поблагодарил", "Кого благодарил"),
+    ]
+    tabs = st.tabs([s[1] for s in specs])
+    for tab, (kind, _title, key_col, partner_col, mode, valcol, partner_title) in zip(tabs, specs):
         with tab:
-            st.dataframe(table(kind), use_container_width=True, hide_index=True)
-            st.caption("Это операционная витрина охвата признания, не оценка качества людей — платформа не ранжирует сотрудников.")
+            if mode == "merits":
+                s = fd.groupby(key_col)[TX["merits"]].sum()
+            else:
+                s = fd.groupby(key_col)[partner_col].nunique()
+            s = s.sort_values(ascending=False).head(N)
+            pids = list(s.index)
+            df = pd.DataFrame([{"ФИО": _fio(m, pid), "Должность": m[EMP["pos"]].get(pid, ""),
+                                "Отдел": m[EMP["dept"]].get(pid, ""), valcol: int(v)} for pid, v in s.items()])
+            sel = []
+            try:
+                ev = st.dataframe(df, use_container_width=True, hide_index=True,
+                                  on_select="rerun", selection_mode="single-row", key=f"rate_{kind}")
+                sel = list(ev.selection.rows) if (ev and getattr(ev, "selection", None)) else []
+            except TypeError:
+                st.dataframe(df, use_container_width=True, hide_index=True)  # старый Streamlit без выбора строк
+            if sel:
+                pid = pids[sel[0]]
+                sub = fd[fd[key_col] == pid]
+                pv = (sub.groupby(partner_col)
+                         .agg(Голосов=(TX["merits"], "sum"), Карточек=(TX["merits"], "size"))
+                         .reset_index().sort_values("Голосов", ascending=False))
+                prows = [{partner_title: _fio(m, r[partner_col]), "Отдел": m[EMP["dept"]].get(r[partner_col], ""),
+                          "Голосов": int(r["Голосов"]), "Карточек": int(r["Карточек"])} for _, r in pv.iterrows()]
+                st.markdown(f"**{partner_title} · {_fio(m, pid)}** — {len(prows)} чел.")
+                st.dataframe(pd.DataFrame(prows), use_container_width=True, hide_index=True, height=300)
+            else:
+                st.caption("👆 Нажмите на строку сотрудника — покажу, кто стоит за этими благодарностями.")
+            st.caption("Операционная витрина охвата признания, не оценка качества людей — платформа не ранжирует сотрудников.")
 
 
 # ─────────────────────────── МЕРИТПАСПОРТ ───────────────────────────
@@ -123,9 +138,11 @@ def _donut(title, series):
 
 def render_meritpassport(fd, tx_all, emp):
     names = sorted(emp["full_name"].dropna().unique().tolist())
-    who = st.selectbox("Сотрудник", names, index=None, placeholder="выберите сотрудника…")
+    pre = st.session_state.get("passport_pick") or None
+    idx = names.index(pre) if pre in names else None
+    who = st.selectbox("🔎 Сотрудник (введите фамилию)", names, index=idx, placeholder="выберите или найдите по фамилии…")
     if not who:
-        st.info("Выберите сотрудника, чтобы увидеть его меритпаспорт.")
+        st.info("Выберите сотрудника или найдите по фамилии — здесь или в поиске на панели слева.")
         return
     row = emp[emp["full_name"] == who].iloc[0]
     pid = row[EMP["id"]]
@@ -144,17 +161,35 @@ def render_meritpassport(fd, tx_all, emp):
     c3.metric("Признан коллегами", f"{reach_in}", help="скольких разных людей он(а) поблагодарили — охват признания")
     c4.metric("Стиль участия", bal)
 
+    sel_recv_val = sel_sent_val = None
     d1, d2 = st.columns(2)
     with d1:
         if go is not None and len(recv):
-            st.plotly_chart(_donut("За что признают",
-                                   recv.groupby(TX["value"])[TX["merits"]].sum().sort_values(ascending=False)),
-                            use_container_width=True)
+            f1 = _donut("За что признают", recv.groupby(TX["value"])[TX["merits"]].sum().sort_values(ascending=False))
+            try:
+                ev = st.plotly_chart(f1, use_container_width=True, on_select="rerun", key="donut_recv")
+                pts = ev.selection.points if (ev and getattr(ev, "selection", None)) else []
+                if pts:
+                    sel_recv_val = pts[0].get("label")
+            except TypeError:
+                st.plotly_chart(f1, use_container_width=True)
     with d2:
         if go is not None and len(sent):
-            st.plotly_chart(_donut("За что благодарит других",
-                                   sent.groupby(TX["value"])[TX["merits"]].sum().sort_values(ascending=False)),
-                            use_container_width=True)
+            f2 = _donut("За что благодарит других", sent.groupby(TX["value"])[TX["merits"]].sum().sort_values(ascending=False))
+            try:
+                ev2 = st.plotly_chart(f2, use_container_width=True, on_select="rerun", key="donut_sent")
+                pts2 = ev2.selection.points if (ev2 and getattr(ev2, "selection", None)) else []
+                if pts2:
+                    sel_sent_val = pts2[0].get("label")
+            except TypeError:
+                st.plotly_chart(f2, use_container_width=True)
+    if (go is not None) and (len(recv) or len(sent)):
+        st.caption("👆 Клик по доле на диаграмме — отфильтровать комментарии ниже по этой ценности.")
+    # игнорируем «залипшую» от прошлого сотрудника ценность, которой у него нет
+    if sel_recv_val and sel_recv_val not in set(recv[TX["value"]].dropna()):
+        sel_recv_val = None
+    if sel_sent_val and sel_sent_val not in set(sent[TX["value"]].dropna()):
+        sel_sent_val = None
 
     if go is not None and (len(recv) or len(sent)):
         rin = recv.dropna(subset=["dt"]).groupby("ym").size()
@@ -172,28 +207,32 @@ def render_meritpassport(fd, tx_all, emp):
     m = _emap(emp)
     cc1, cc2 = st.columns(2)
     with cc1:
-        st.markdown("**Полученные комментарии**")
+        st.markdown("**Полученные комментарии**" + (f" · ценность: {sel_recv_val}" if sel_recv_val else ""))
         rc = recv[recv[TX["comment"]].notna()].copy()
+        if sel_recv_val:
+            rc = rc[rc[TX["value"]] == sel_recv_val]
         if len(rc):
             rc = rc.sort_values("dt", ascending=False) if "dt" in rc.columns else rc
             rc["От кого"] = rc[TX["sid"]].map(lambda p: _fio(m, p))
             show = rc[["От кого", TX["value"], TX["comment"]]].rename(
                 columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"})
-            st.caption(f"Всего: {len(show)}")
+            st.caption(f"Показано: {len(show)}" + (" · фильтр по ценности" if sel_recv_val else ""))
             st.dataframe(show, use_container_width=True, hide_index=True, height=320)
         else:
-            st.caption("Пока нет полученных комментариев.")
+            st.caption("Нет комментариев по этой ценности." if sel_recv_val else "Пока нет полученных комментариев.")
     with cc2:
-        st.markdown("**Отправленные комментарии**")
+        st.markdown("**Отправленные комментарии**" + (f" · ценность: {sel_sent_val}" if sel_sent_val else ""))
         sc = sent[sent[TX["comment"]].notna()].copy()
+        if sel_sent_val:
+            sc = sc[sc[TX["value"]] == sel_sent_val]
         if len(sc):
             sc = sc.sort_values("dt", ascending=False) if "dt" in sc.columns else sc
             sc["Кому"] = sc[TX["rid"]].map(lambda p: _fio(m, p))
             show = sc[["Кому", TX["value"], TX["comment"]]].rename(
                 columns={TX["value"]: "Ценность", TX["comment"]: "Комментарий"})
-            st.caption(f"Всего: {len(show)}")
+            st.caption(f"Показано: {len(show)}" + (" · фильтр по ценности" if sel_sent_val else ""))
             st.dataframe(show, use_container_width=True, hide_index=True, height=320)
         else:
-            st.caption("Пока нет отправленных комментариев.")
+            st.caption("Нет комментариев по этой ценности." if sel_sent_val else "Пока нет отправленных комментариев.")
 
     st.caption("Меритпаспорт — зеркало участия в признании, не оценка. Характеристики описывают позицию в этот период.")

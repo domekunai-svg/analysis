@@ -422,6 +422,11 @@ def sidebar_controls(tx, emp):
         real_max = 500
     mr = st.sidebar.slider("Сила связи (мериты) — фильтр графа", 1, real_max, (1, real_max), 1,
                            help="Скрывает очень слабые или очень сильные связи, чтобы граф читался. Обычно трогать не нужно.")
+
+    st.sidebar.markdown('<div class="sidebar-section">Меритпаспорт</div>', unsafe_allow_html=True)
+    _names = sorted(emp["full_name"].dropna().unique().tolist())
+    st.sidebar.selectbox("🔎 Найти сотрудника", [""] + _names, key="passport_pick",
+                         help="Выберите человека — и откройте вкладку «Меритпаспорт», она будет уже загружена на него")
     return dict(d_from=d_from, d_to=d_to, years=set(sel_years), months=set(sel_months), values=set(sel_vals),
                 companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps), side=side, merit_range=mr)
 
@@ -557,13 +562,20 @@ def render_values(fd, emp):
     vc["Доля, %"] = (vc["Меритов"] / vc["Меритов"].sum() * 100).round(1)
     vc = vc.sort_values("Доля, %", ascending=False).reset_index(drop=True)
     K = len(vc); top3 = vc.head(3)["Доля, %"].sum()
-    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+    c1, c2 = st.columns([3, 2], vertical_alignment="top")
+    sel_val = None
     with c1:
         if go is not None:
             fig = go.Figure(go.Bar(x=vc["Доля, %"], y=vc[TX["value"]], orientation="h", marker_color=CORAL))
-            light(fig, "Доля меритов по ценностям", 380)
+            light(fig, "Доля меритов по ценностям — нажмите на полосу", 380)
             fig.update_layout(yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                ev = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="valmap")
+                pts = ev.selection.points if (ev and getattr(ev, "selection", None)) else []
+                if pts:
+                    sel_val = pts[0].get("y") or pts[0].get("label")
+            except TypeError:
+                st.plotly_chart(fig, use_container_width=True)
         else:
             st.dataframe(vc, use_container_width=True, hide_index=True)
     with c2:
@@ -572,8 +584,18 @@ def render_values(fd, emp):
                     f'({", ".join(vc.head(3)[TX["value"]])}).<br>'
                     f'<span class="muted">Чем выше доля немногих ценностей, тем у́же язык признания в компании.</span></div>',
                     unsafe_allow_html=True)
-        if panels is not None:
-            panels.render_value_people(fd, emp)
+        if sel_val:
+            nm = emp.set_index(EMP["id"]); nm = nm[~nm.index.duplicated(keep="first")]
+            sub = fd[fd[TX["value"]] == sel_val]
+            who = (sub.groupby(TX["sid"]).agg(Голосов=(TX["merits"], "sum"), Карточек=(TX["merits"], "size"))
+                   .reset_index().sort_values("Голосов", ascending=False).head(25))
+            rows = [{"ФИО": nm["full_name"].get(r[TX["sid"]], r[TX["sid"]]),
+                     "Отдел": nm[EMP["dept"]].get(r[TX["sid"]], ""),
+                     "Голосов": int(r["Голосов"]), "Карточек": int(r["Карточек"])} for _, r in who.iterrows()]
+            st.markdown(f"**Кто формирует «{sel_val}»** — {len(rows)} чел.")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=300)
+        else:
+            st.caption("👆 Нажмите на ценность на графике — покажу, кто её формирует.")
     if len(fd) < 200:
         st.caption("Выборка невелика — доли по отдельным ценностям могут заметно колебаться.")
 
@@ -1155,7 +1177,7 @@ def main():
             with Debug.stage("render_value_evolution", fatal=False): render_value_evolution(fd)
             with Debug.stage("render_grade_dynamics", fatal=False): render_grade_dynamics(tx, emp)
             with Debug.stage("render_tenure", fatal=False): render_tenure(fd, emp)
-            st.markdown('<div class="section-header">Рейтинг охвата</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Рейтинги</div>', unsafe_allow_html=True)
             if panels is not None:
                 with Debug.stage("render_rating", fatal=False): panels.render_rating(fd, emp)
             with Debug.stage("render_leave", fatal=False): render_leave(tx, emp, closed_view=True)
