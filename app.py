@@ -524,9 +524,30 @@ def render_temporal(fd, emp, limits=None):
         trimmed = (fdt.loc[in_last, "dt"].dt.day.max() if in_last.any() else 31) < 25
         plot = monthly.iloc[:-1] if trimmed and len(monthly) > 2 else monthly
         fig = go.Figure(go.Scatter(x=plot["d"], y=plot["Актов"], mode="lines+markers", line=dict(color=CORAL, width=2.5)))
-        light(fig, "Помесячный объём — число актов" + (" (последний неполный месяц скрыт)" if trimmed else ""), 260)
+        light(fig, "Помесячный объём — число актов" + (" (последний неполный месяц скрыт)" if trimmed else "") + " · нажмите на точку", 260)
         _mark_limits(fig, limits)
-        st.plotly_chart(fig, use_container_width=True)
+        sel_ym = None
+        try:
+            ev = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="pulse_month")
+            pts = ev.selection.points if (ev and getattr(ev, "selection", None)) else []
+            if pts and pts[0].get("x"):
+                sel_ym = pd.Timestamp(pts[0]["x"]).to_period("M").strftime("%Y-%m")
+        except TypeError:
+            st.plotly_chart(fig, use_container_width=True)
+        if sel_ym:
+            msub = fdt[fdt["ym"] == sel_ym]
+            nmp = emp.set_index(EMP["id"]); nmp = nmp[~nmp.index.duplicated(keep="first")]
+            tg = msub.groupby(TX["sid"]).size().sort_values(ascending=False).head(8)
+            tv = msub.groupby(TX["value"]).size().sort_values(ascending=False).head(6)
+            dca, dcb = st.columns(2)
+            with dca:
+                st.markdown(f"**{sel_ym}: кто активнее благодарил**")
+                st.dataframe(pd.DataFrame([{"ФИО": nmp["full_name"].get(p, p), "Благодарностей": int(c)} for p, c in tg.items()]),
+                             use_container_width=True, hide_index=True)
+            with dcb:
+                st.markdown(f"**{sel_ym}: за какие ценности**")
+                st.dataframe(pd.DataFrame([{"Ценность": v, "Актов": int(c)} for v, c in tv.items()]),
+                             use_container_width=True, hide_index=True)
     if limits:
         d, new, old = limits[-1]
         st.markdown(f'<div class="info-box">Вертикальная линия — смена лимита голосов на один акт '
@@ -882,8 +903,28 @@ def render_vertical(fd, emp):
                 x=["получатель: рук", "получатель: спец"], y=["отправитель: рук", "отправитель: спец"],
                 text=[[rr, down], [up, spsp]], texttemplate="%{text}",
                 colorscale=[[0, "#fbeee6"], [1, "#e95f3e"]], showscale=False))
-            light(fig, "Кто кого признаёт (число актов)", 280)
-            st.plotly_chart(fig, use_container_width=True)
+            light(fig, "Кто кого признаёт (число актов) — нажмите на ячейку", 280)
+            sel_cell = None
+            try:
+                ev = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="vheat")
+                pts = ev.selection.points if (ev and getattr(ev, "selection", None)) else []
+                if pts:
+                    slev = "рук" if "рук" in str(pts[0].get("y", "")) else "спец"
+                    rlev = "рук" if "рук" in str(pts[0].get("x", "")) else "спец"
+                    sel_cell = (slev, rlev)
+            except TypeError:
+                st.plotly_chart(fig, use_container_width=True)
+            if sel_cell:
+                slev, rlev = sel_cell
+                nmv = emp.set_index(EMP["id"]); nmv = nmv[~nmv.index.duplicated(keep="first")]
+                cs = sub[(sub["s_Уровень"] == slev) & (sub["r_Уровень"] == rlev)]
+                pr = (cs.groupby([TX["sid"], TX["rid"]]).size().reset_index(name="n")
+                      .sort_values("n", ascending=False).head(15))
+                rows = [{"От кого": nmv["full_name"].get(r[TX["sid"]], r[TX["sid"]]),
+                         "Кому": nmv["full_name"].get(r[TX["rid"]], r[TX["rid"]]), "Актов": int(r["n"])}
+                        for _, r in pr.iterrows()]
+                st.markdown(f"**{slev} → {rlev}** — пары за этой ячейкой ({len(cs):,} актов):")
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=260)
             figb = go.Figure()
             figb.add_trace(go.Bar(name="Руководители", x=["получает на 1 чел", "отдаёт на 1 чел"],
                                   y=[round(recv_ruk / nruk, 1), round(sent_ruk / nruk, 1)], marker_color="#e95f3e"))
