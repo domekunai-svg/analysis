@@ -97,7 +97,8 @@ def grade_dynamics_figure(go, make_subplots, tx, unit_col, unit_value):
                           row=1, col=i)
     fig.update_layout(template="plotly_white", height=430, paper_bgcolor="rgba(0,0,0,0)",
                       plot_bgcolor="rgba(0,0,0,0)", font=dict(color=theme.INK, family="Golos Text, sans-serif"),
-                      margin=dict(l=46, r=10, t=64, b=10), legend=dict(orientation="h", y=-0.14))
+                      margin=dict(l=46, r=10, t=64, b=10), legend=dict(orientation="h", y=-0.14),
+                      dragmode="pan", modebar=dict(remove=["zoom2d", "select2d", "lasso2d", "autoScale2d"]))
     fig.update_annotations(font_size=13)
     fig.update_xaxes(gridcolor=theme.GRID, zeroline=False)
     fig.update_yaxes(gridcolor=theme.GRID, zeroline=False)

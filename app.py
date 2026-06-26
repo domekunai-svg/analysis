@@ -102,7 +102,8 @@ st.set_page_config(page_title="3Д Коммуникации", page_icon="🪡", 
 def light(fig, title, height):
     fig.update_layout(template="plotly_white", height=height, margin=dict(l=10, r=10, t=44, b=10),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                      font=dict(color=theme.INK, family="Golos Text, sans-serif"), title=title)
+                      font=dict(color=theme.INK, family="Golos Text, sans-serif"), title=title,
+                      dragmode="pan", modebar=dict(remove=["zoom2d", "select2d", "lasso2d", "autoScale2d"]))
     fig.update_xaxes(gridcolor=theme.GRID, zeroline=False)
     fig.update_yaxes(gridcolor=theme.GRID, zeroline=False)
     return fig
@@ -142,6 +143,8 @@ CSS_TMPL = """
  .stButton>button,.stDownloadButton>button{background:__CARD__;color:#e95f3e;border:1px solid __BORDER__;border-radius:10px;}
  .stButton>button:hover,.stDownloadButton>button:hover{border-color:#e95f3e;}
  .sidebar-section{font-size:.7rem;text-transform:uppercase;letter-spacing:1.4px;color:__MUTED__ !important;margin:1rem 0 .3rem;font-weight:600;}
+ [data-baseweb="popover"] ul[role="listbox"]{max-height:340px !important;}
+ .st-key-flt_vals div[data-baseweb="select"]>div:first-child{min-height:120px;align-items:flex-start;}
 </style>
 """
 
@@ -165,14 +168,19 @@ def localize_widgets():
         components.html("""<script>
         var MON={January:'Январь',February:'Февраль',March:'Март',April:'Апрель',May:'Май',June:'Июнь',July:'Июль',August:'Август',September:'Сентябрь',October:'Октябрь',November:'Ноябрь',December:'Декабрь'};
         var WD={Sunday:'Вс',Monday:'Пн',Tuesday:'Вт',Wednesday:'Ср',Thursday:'Чт',Friday:'Пт',Saturday:'Сб',Su:'Вс',Mo:'Пн',Tu:'Вт',We:'Ср',Th:'Чт',Fr:'Пт',Sa:'Сб'};
-        setInterval(function(){try{var d=window.parent.document;if(!d)return;
-        d.querySelectorAll('li,div,span,button,p,th,abbr').forEach(function(n){if(n.childElementCount===0){
+        var TXT={'Select all':'Выбрать всё','Choose an option':'Выберите…','Choose a date range':'Выберите диапазон','None':'Не выбрано','Past Week':'Прошлая неделя','Past Month':'Прошлый месяц','Past 3 Months':'Последние 3 месяца','Past 6 Months':'Последние 6 месяцев','Past Year':'Прошлый год','Past 2 Years':'Последние 2 года','Today':'Сегодня'};
+        var MB={'Download plot as a PNG':'Скачать как PNG','Zoom in':'Приблизить','Zoom out':'Отдалить','Pan':'Перемещение','Reset axes':'Сбросить масштаб','Autoscale':'Автомасштаб','Box Select':'Прямоуг. выделение','Lasso Select':'Лассо','Zoom':'Зум','Reset axes':'Сбросить масштаб'};
+        function tr(){try{var d=window.parent.document;if(!d)return;
+        d.querySelectorAll('li,div,span,button,p,th,abbr,option').forEach(function(n){if(n.childElementCount===0){
         var t=n.textContent.trim();
-        if(t==='Select all'){n.textContent='Выбрать всё';}
-        else if(t==='Choose an option'){n.textContent='Выберите…';}
+        if(TXT[t]){n.textContent=TXT[t];}
+        else if(MON[t]){n.textContent=MON[t];}
         else if(WD[t]){n.textContent=WD[t];}
         else{var m=t.match(/^([A-Za-z]+)\\s+(\\d{4})$/);if(m&&MON[m[1]]){n.textContent=MON[m[1]]+' '+m[2];}}
-        }});}catch(e){}},500);
+        }});
+        d.querySelectorAll('a.modebar-btn').forEach(function(b){var t=b.getAttribute('data-title');if(t&&MB[t]){b.setAttribute('data-title',MB[t]);}});
+        }catch(e){}}
+        setInterval(tr,500);
         </script>""", height=0)
     except Exception:
         pass
@@ -184,7 +192,7 @@ def logo_html(base):
         if os.path.exists(p):
             try:
                 b64 = base64.b64encode(open(p, "rb").read()).decode()
-                return f'<img src="data:{mime};base64,{b64}" style="height:48px;border-radius:10px;vertical-align:middle">'
+                return f'<img src="data:{mime};base64,{b64}" style="height:50px;border-radius:10px;display:block">'
             except Exception:
                 pass
     return ('<svg width="44" height="44" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="#e95f3e"/>'
@@ -403,10 +411,6 @@ def sidebar_controls(tx, emp):
         d_from, d_to = dr
     else:
         d_from = d_to = (dr if not isinstance(dr, (list, tuple)) else dmin_d)
-    if st.sidebar.button("↺ Сбросить все фильтры", use_container_width=True):
-        for _k in ("flt_dates", "flt_years", "flt_months", "flt_comps", "flt_depts", "flt_emps", "flt_side", "flt_vals"):
-            st.session_state.pop(_k, None)
-        st.rerun()
     years = sorted(tx["year"].dropna().unique().astype(int).tolist())
     sel_years = st.sidebar.multiselect("Год", years, placeholder="все годы", key="flt_years")
     months = sorted(tx["month"].dropna().unique().astype(int).tolist())
@@ -428,9 +432,15 @@ def sidebar_controls(tx, emp):
     side = st.sidebar.radio("Сторона признания", ["обе стороны", "только отправитель", "только получатель"], index=0,
                             help="Двусторонний фильтр сохраняет и входящую сторону признания", key="flt_side")
 
-    st.sidebar.markdown('<div class="sidebar-section">Ценности</div>', unsafe_allow_html=True)
+    st.sidebar.markdown('<div class="sidebar-section">Линейка ценностей</div>', unsafe_allow_html=True)
     vals = sorted(tx[TX["value"]].dropna().unique().tolist())
-    sel_vals = st.sidebar.multiselect("Ценности", vals, default=vals, key="flt_vals")
+    sel_vals = st.sidebar.multiselect("Линейка ценностей", vals, default=vals, key="flt_vals", label_visibility="collapsed")
+
+    st.sidebar.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
+    if st.sidebar.button("↺ Сбросить все фильтры", use_container_width=True):
+        for _k in ("flt_dates", "flt_years", "flt_months", "flt_comps", "flt_depts", "flt_emps", "flt_side", "flt_vals", "graph_strength"):
+            st.session_state.pop(_k, None)
+        st.rerun()
     return dict(d_from=d_from, d_to=d_to, years=set(sel_years), months=set(sel_months), values=set(sel_vals),
                 companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps), side=side)
 
@@ -1160,10 +1170,11 @@ def main():
     localize_widgets()
 
     base = os.path.dirname(os.path.abspath(__file__))
-    st.markdown(f"""<div style="display:flex;align-items:center;gap:12px;padding:.3rem 0 .2rem">
+    st.markdown(f"""<div style="display:flex;align-items:center;gap:14px;padding:.3rem 0 .2rem">
         {logo_html(base)}
-        <div><span style="font-size:1.1rem;font-weight:700;color:#e95f3e;">3Д Коммуникации</span>
-        <span style="color:#a89d95;font-size:.85rem;margin-left:8px;">Социальные технологии для бизнеса</span></div>
+        <div style="display:flex;flex-direction:column;justify-content:center;line-height:1.25">
+        <span style="font-size:1.15rem;font-weight:700;color:#e95f3e;">3Д Коммуникации</span>
+        <span style="color:#a89d95;font-size:.82rem;">Социальные технологии для бизнеса</span></div>
         </div>
         <div class="hero">Социальный томограф</div>
         <div class="muted" style="margin-bottom:.4rem">ГК Термекс · программа «3Д Коммуникации»</div>""",
@@ -1195,13 +1206,21 @@ def main():
 
         n_comp = fd["s_" + EMP["company"]].nunique(); n_dep = fd["s_dept_key"].nunique()
         n_ppl = pd.Index(fd[TX["sid"]]).append(pd.Index(fd[TX["rid"]])).nunique()
-        c1, c2, c3, c4, c5 = st.columns(5)
+        act_emp = emp[emp[EMP["fire"]].isna()]
+        if cfg["companies"]:
+            act_emp = act_emp[act_emp[EMP["company"]].isin(cfg["companies"])]
+        if cfg["depts"]:
+            act_emp = act_emp[act_emp["dept_key"].isin(cfg["depts"])]
+        n_act = len(act_emp)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Транзакций", f"{len(fd):,}")
         c2.metric("Меритов", f"{int(fd[TX['merits']].sum()):,}",
                   help="суммарные голоса; потолок на один акт менялся 6→10 (01.09.2025) — сравнивать периоды осторожно")
         c3.metric("Компаний", f"{n_comp}"); c4.metric("Отделов", f"{n_dep}")
         c5.metric("Людей в признании", f"{n_ppl:,}",
                   help="разные люди, отдавшие или получившие признание за период (включая уволенных за этот период); это не штатная численность")
+        c6.metric("Активных пользователей", f"{n_act:,}",
+                  help="сотрудники без даты увольнения (в выбранных компаниях/отделах); это база для расчёта вовлечённости")
 
         # Условное предупреждение об охвате — всплывает только при низком покрытии (универсально для разных компаний)
         if TX["comment"] in fd.columns and len(fd):

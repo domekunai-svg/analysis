@@ -24,7 +24,8 @@ WARM = ["#e95f3e", "#5e7d16", "#c9871f", "#c0492f", "#8a9a3f", "#b5743a",
 def _light(fig, title, height):
     fig.update_layout(template="plotly_white", height=height, margin=dict(l=10, r=10, t=44, b=10),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                      font=dict(color=theme.INK, family="Golos Text, sans-serif"), title=title)
+                      font=dict(color=theme.INK, family="Golos Text, sans-serif"), title=title,
+                      dragmode="pan", modebar=dict(remove=["zoom2d", "select2d", "lasso2d", "autoScale2d"]))
     fig.update_xaxes(gridcolor=theme.GRID, zeroline=False)
     fig.update_yaxes(gridcolor=theme.GRID, zeroline=False)
     return fig
@@ -52,16 +53,16 @@ def daily_pulse_fig(fd, emp):
     daily = a.groupby("d").agg(acts=(TX["merits"], "size")).reset_index()
     names_by_day = {}
     for d, sub in a.groupby("d"):
-        top = sub.groupby(TX["sid"]).size().sort_values(ascending=False).head(6)
+        top = sub.groupby(TX["rid"]).size().sort_values(ascending=False).head(6)
         names = [f"{_fio(m, pid)} ({c})" for pid, c in top.items()]
-        extra = sub[TX["sid"]].nunique() - len(names)
+        extra = sub[TX["rid"]].nunique() - len(names)
         names_by_day[d] = "<br>".join(names) + (f"<br>…и ещё {extra}" if extra > 0 else "")
     daily["names"] = daily["d"].map(names_by_day)
     fig = go.Figure(go.Bar(
         x=daily["d"], y=daily["acts"], customdata=daily["names"], marker_color=CORAL,
         hovertemplate="<b>%{x|%d.%m.%Y}</b><br>Благодарностей: %{y}<br><br>"
-                      "<b>Кто благодарил:</b><br>%{customdata}<extra></extra>"))
-    _light(fig, "Пульс по дням — наведите на столбик, чтобы увидеть, кто благодарил в этот день", 320)
+                      "<b>Кого благодарили:</b><br>%{customdata}<extra></extra>"))
+    _light(fig, "Пульс по дням — наведите на столбик, чтобы увидеть, кого благодарили в этот день", 320)
     fig.update_layout(bargap=0.1)
     return fig
 
