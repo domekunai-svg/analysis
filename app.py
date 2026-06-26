@@ -162,22 +162,31 @@ def localize_widgets():
     if components is None:
         return
     try:
-        components.html("<script>setInterval(function(){try{var d=window.parent.document;if(!d)return;"
-                        "d.querySelectorAll('li,div,span,button,p').forEach(function(n){if(n.childElementCount===0){"
-                        "var t=n.textContent.trim();if(t==='Select all'){n.textContent='Выбрать всё';}"
-                        "else if(t==='Choose an option'){n.textContent='Выберите…';}}});}catch(e){}},700);</script>", height=0)
+        components.html("""<script>
+        var MON={January:'Январь',February:'Февраль',March:'Март',April:'Апрель',May:'Май',June:'Июнь',July:'Июль',August:'Август',September:'Сентябрь',October:'Октябрь',November:'Ноябрь',December:'Декабрь'};
+        var WD={Sunday:'Вс',Monday:'Пн',Tuesday:'Вт',Wednesday:'Ср',Thursday:'Чт',Friday:'Пт',Saturday:'Сб',Su:'Вс',Mo:'Пн',Tu:'Вт',We:'Ср',Th:'Чт',Fr:'Пт',Sa:'Сб'};
+        setInterval(function(){try{var d=window.parent.document;if(!d)return;
+        d.querySelectorAll('li,div,span,button,p,th,abbr').forEach(function(n){if(n.childElementCount===0){
+        var t=n.textContent.trim();
+        if(t==='Select all'){n.textContent='Выбрать всё';}
+        else if(t==='Choose an option'){n.textContent='Выберите…';}
+        else if(WD[t]){n.textContent=WD[t];}
+        else{var m=t.match(/^([A-Za-z]+)\\s+(\\d{4})$/);if(m&&MON[m[1]]){n.textContent=MON[m[1]]+' '+m[2];}}
+        }});}catch(e){}},500);
+        </script>""", height=0)
     except Exception:
         pass
 
 
 def logo_html(base):
-    p = os.path.join(base, "logo.png")
-    if os.path.exists(p):
-        try:
-            b64 = base64.b64encode(open(p, "rb").read()).decode()
-            return f'<img src="data:image/png;base64,{b64}" style="height:44px;border-radius:10px;vertical-align:middle">'
-        except Exception:
-            pass
+    for ext, mime in (("png", "image/png"), ("svg", "image/svg+xml"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg")):
+        p = os.path.join(base, f"logo.{ext}")
+        if os.path.exists(p):
+            try:
+                b64 = base64.b64encode(open(p, "rb").read()).decode()
+                return f'<img src="data:{mime};base64,{b64}" style="height:48px;border-radius:10px;vertical-align:middle">'
+            except Exception:
+                pass
     return ('<svg width="44" height="44" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="#e95f3e"/>'
             '<g fill="none" stroke="#faf2ea" stroke-width="6" stroke-linejoin="round" stroke-linecap="round">'
             '<path d="M50 22 L74 36 L74 64 L50 78 L26 64 L26 36 Z"/><path d="M50 22 L50 50 M50 50 L74 36 M50 50 L26 36"/></g></svg>')
@@ -389,46 +398,41 @@ def sidebar_controls(tx, emp):
     dmin = tx["dt"].min(); dmax = tx["dt"].max()
     dmin_d = dmin.date() if pd.notna(dmin) else None
     dmax_d = dmax.date() if pd.notna(dmax) else None
-    dr = st.sidebar.date_input("Диапазон дат", (dmin_d, dmax_d), min_value=dmin_d, max_value=dmax_d)
+    dr = st.sidebar.date_input("Диапазон дат", (dmin_d, dmax_d), min_value=dmin_d, max_value=dmax_d, key="flt_dates")
     if isinstance(dr, (list, tuple)) and len(dr) == 2:
         d_from, d_to = dr
     else:
         d_from = d_to = (dr if not isinstance(dr, (list, tuple)) else dmin_d)
+    if st.sidebar.button("↺ Сбросить все фильтры", use_container_width=True):
+        for _k in ("flt_dates", "flt_years", "flt_months", "flt_comps", "flt_depts", "flt_emps", "flt_side", "flt_vals"):
+            st.session_state.pop(_k, None)
+        st.rerun()
     years = sorted(tx["year"].dropna().unique().astype(int).tolist())
-    sel_years = st.sidebar.multiselect("Год", years, default=[], placeholder="все годы")
+    sel_years = st.sidebar.multiselect("Год", years, placeholder="все годы", key="flt_years")
     months = sorted(tx["month"].dropna().unique().astype(int).tolist())
-    sel_months = st.sidebar.multiselect("Месяц", months, format_func=lambda x: MM.get(x, x), default=[], placeholder="все месяцы")
+    sel_months = st.sidebar.multiselect("Месяц", months, format_func=lambda x: MM.get(x, x), placeholder="все месяцы", key="flt_months")
 
     st.sidebar.markdown('<div class="sidebar-section">Организация</div>', unsafe_allow_html=True)
     comps = sorted(emp[EMP["company"]].dropna().unique().tolist())
-    sel_comps = st.sidebar.multiselect("Компания", comps, default=[], placeholder="все компании")
+    sel_comps = st.sidebar.multiselect("Компания", comps, placeholder="все компании", key="flt_comps")
     dpool = emp[emp[EMP["company"]].isin(sel_comps)] if sel_comps else emp
     depts = sorted(dpool["dept_key"].dropna().unique().tolist())
-    sel_depts = st.sidebar.multiselect("Отдел", depts, default=[], placeholder="все отделы")
+    if "flt_depts" in st.session_state:
+        st.session_state["flt_depts"] = [d for d in st.session_state["flt_depts"] if d in depts]
+    sel_depts = st.sidebar.multiselect("Отдел", depts, placeholder="все отделы", key="flt_depts")
     epool = dpool[dpool["dept_key"].isin(sel_depts)] if sel_depts else dpool
     emps = sorted(epool["full_name"].dropna().unique().tolist())
-    sel_emps = st.sidebar.multiselect("Сотрудники", emps, default=[], placeholder="все сотрудники")
+    if "flt_emps" in st.session_state:
+        st.session_state["flt_emps"] = [e for e in st.session_state["flt_emps"] if e in emps]
+    sel_emps = st.sidebar.multiselect("Сотрудники", emps, placeholder="все сотрудники", key="flt_emps")
     side = st.sidebar.radio("Сторона признания", ["обе стороны", "только отправитель", "только получатель"], index=0,
-                            help="Двусторонний фильтр сохраняет и входящую сторону признания")
+                            help="Двусторонний фильтр сохраняет и входящую сторону признания", key="flt_side")
 
     st.sidebar.markdown('<div class="sidebar-section">Ценности</div>', unsafe_allow_html=True)
     vals = sorted(tx[TX["value"]].dropna().unique().tolist())
-    sel_vals = st.sidebar.multiselect("Ценности", vals, default=vals)
-
-    st.sidebar.markdown('<div class="sidebar-section">Граф</div>', unsafe_allow_html=True)
-    try:
-        real_max = max(int(tx.groupby([TX["sid"], TX["rid"]])[TX["merits"]].sum().max()), 10)
-    except Exception:
-        real_max = 500
-    mr = st.sidebar.slider("Сила связи (мериты) — фильтр графа", 1, real_max, (1, real_max), 1,
-                           help="Скрывает очень слабые или очень сильные связи, чтобы граф читался. Обычно трогать не нужно.")
-
-    st.sidebar.markdown('<div class="sidebar-section">Меритпаспорт</div>', unsafe_allow_html=True)
-    _names = sorted(emp["full_name"].dropna().unique().tolist())
-    st.sidebar.selectbox("🔎 Найти сотрудника", [""] + _names, key="passport_pick",
-                         help="Выберите человека — и откройте вкладку «Меритпаспорт», она будет уже загружена на него")
+    sel_vals = st.sidebar.multiselect("Ценности", vals, default=vals, key="flt_vals")
     return dict(d_from=d_from, d_to=d_to, years=set(sel_years), months=set(sel_months), values=set(sel_vals),
-                companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps), side=side, merit_range=mr)
+                companies=set(sel_comps), depts=set(sel_depts), emps=set(sel_emps), side=side)
 
 
 def apply_filters(tx, cfg):
@@ -469,7 +473,7 @@ def compute_funnel(emp, fd):
     involved = set(fd[TX["sid"]].unique()) | receivers
     n_involved = len(involved); total = int(fd[TX["merits"]].sum())
     cshare = round(fd[TX["comment"]].notna().mean() * 100, 1) if (TX["comment"] in fd.columns and len(fd)) else 0
-    return dict(n_involved=n_involved, n_senders=n_senders, n_regular=n_regular, n_receivers=len(receivers),
+    return dict(n_involved=n_involved, n_senders=n_senders, n_regular=n_regular, n_receivers=len(receivers), n_active=n_active,
                 involve_share=round(n_involved / n_active * 100, 1) if n_active else 0,
                 send_share=round(n_senders / n_involved * 100, 1) if n_involved else 0,
                 comment_share=cshare,
@@ -479,8 +483,8 @@ def compute_funnel(emp, fd):
 def render_funnel(f):
     st.markdown('<div class="section-header">Вовлечённость в программу признания</div>', unsafe_allow_html=True)
     cards = [
-        ("Участвуют в признании", f"{f['n_involved']:,}", f"{f['involve_share']}% активных · отдали или получили благодарность"),
-        ("Отправляют благодарности", f"{f['n_senders']:,}", f"{f['send_share']}% участников проявляют активную позицию"),
+        ("Участвуют в признании", f"{f['n_involved']:,}", f"{f['n_involved']:,} из {f['n_active']:,} активных ({f['involve_share']}%) · отдали или получили"),
+        ("Отправляют благодарности", f"{f['n_senders']:,}", f"{f['send_share']}% из участвующих хотя бы раз поблагодарили"),
         ("Регулярно участвуют", f"{f['n_regular']:,}", "отправили больше одной благодарности"),
         ("Получают признание", f"{f['n_receivers']:,}", "хотя бы одна благодарность за период"),
         ("Глубина — с комментарием", f"{f['comment_share']}%", "доля благодарностей с текстом — насколько признание развёрнуто"),
@@ -562,7 +566,7 @@ def render_temporal(fd, emp, limits=None):
         typical = by_ym.groupby("mo")["acts"].mean()
         yrs = by_ym["y"].nunique()
         figs = go.Figure(go.Bar(x=[short[m] for m in typical.index], y=typical.round(0).values, marker_color=AMBER))
-        light(figs, f"Типичный месяц — среднее число актов (по {yrs} годам)", 260)
+        light(figs, f"Сезонное распределение — среднее число актов по месяцам (по {yrs} годам)", 260)
         st.plotly_chart(figs, use_container_width=True)
     with c2:
         late = (fd["day"] >= 25).mean(); expected = (31 - 25 + 1) / 30.4
@@ -1161,7 +1165,7 @@ def main():
         <div><span style="font-size:1.1rem;font-weight:700;color:#e95f3e;">3Д Коммуникации</span>
         <span style="color:#a89d95;font-size:.85rem;margin-left:8px;">Социальные технологии для бизнеса</span></div>
         </div>
-        <div class="hero">Живая ткань признания</div>
+        <div class="hero">Социальный томограф</div>
         <div class="muted" style="margin-bottom:.4rem">ГК Термекс · программа «3Д Коммуникации»</div>""",
         unsafe_allow_html=True)
 
@@ -1195,7 +1199,9 @@ def main():
         c1.metric("Транзакций", f"{len(fd):,}")
         c2.metric("Меритов", f"{int(fd[TX['merits']].sum()):,}",
                   help="суммарные голоса; потолок на один акт менялся 6→10 (01.09.2025) — сравнивать периоды осторожно")
-        c3.metric("Компаний", f"{n_comp}"); c4.metric("Отделов", f"{n_dep}"); c5.metric("Сотрудников", f"{n_ppl:,}")
+        c3.metric("Компаний", f"{n_comp}"); c4.metric("Отделов", f"{n_dep}")
+        c5.metric("Людей в признании", f"{n_ppl:,}",
+                  help="разные люди, отдавшие или получившие признание за период (включая уволенных за этот период); это не штатная численность")
 
         # Условное предупреждение об охвате — всплывает только при низком покрытии (универсально для разных компаний)
         if TX["comment"] in fd.columns and len(fd):
@@ -1204,12 +1210,8 @@ def main():
                 st.caption(f"⚠️ Комментарии заполнены лишь в {cov*100:.0f}% актов — выводы по тексту и «глубине» "
                            f"ограничены: это голос пишущих, не всего коллектива.")
 
-        with Debug.stage("build_graph"):
-            G, _ = build_graph(fd, emp, cfg["merit_range"])
-        with Debug.stage("graph_metrics"):
-            mt = graph_metrics(G)
-
-        t_org, t_net, t_pass, t_an = st.tabs(["Организация", "Сеть признания", "Меритпаспорт", "Аналитик"])
+        G, mt = None, {}
+        t_org, t_net, t_pass, t_an = st.tabs(["Организация", "Социальный граф", "Меритпаспорт", "Аналитик"])
 
         with t_org:
             with Debug.stage("render_funnel", fatal=False): render_funnel(compute_funnel(emp, fd))
@@ -1225,13 +1227,21 @@ def main():
 
         with t_net:
             st.markdown('<div class="section-header">Визуализация сети</div>', unsafe_allow_html=True)
+            try:
+                real_max = max(int(fd.groupby([TX["sid"], TX["rid"]])[TX["merits"]].sum().max()), 10)
+            except Exception:
+                real_max = 500
+            mr = st.slider("Сила связи (мериты) — фильтр графа", 1, real_max, (1, real_max), 1, key="graph_strength",
+                           help="Скрывает очень слабые или очень сильные связи, чтобы граф читался. Обычно трогать не нужно.")
+            with Debug.stage("build_graph", fatal=False): G, _ = build_graph(fd, emp, mr)
+            with Debug.stage("graph_metrics", fatal=False): mt = graph_metrics(G)
             if components is not None and G is not None and G.number_of_nodes() > 0:
                 st.markdown('<div class="info-box">Стрелка показывает направление благодарности (толще к более '
                             'признаваемым узлам). <span style="color:#6b8e23">Оливковые связи — взаимные</span>. '
                             'Клик по узлу подсвечивает его связи; <strong>Ctrl+клик</strong> по нескольким узлам — '
                             'подсветка пути между ними. «Только взаимные» оставляет двусторонние.<br>'
                             'Граф крупный — удобнее начать с фильтра по компании или отделу слева.</div>', unsafe_allow_html=True)
-                gt = st.tabs(["Социальный граф", "Компании → отделы → люди", "Оргструктура (рук/спец, матрица)"])
+                gt = st.tabs(["Связи людей", "Компании → отделы → люди", "Оргструктура (рук/спец, матрица)"])
                 with gt[0]:
                     with Debug.stage("social_graph", fatal=False):
                         components.html(social_graph_html(G, mt), height=1040, scrolling=False)
